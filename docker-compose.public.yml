@@ -1,0 +1,41 @@
+# Overlay for public mode (Caddy + Let's Encrypt auto-HTTPS).
+# Usage: docker compose -f docker-compose.yml -f docker-compose.public.yml up -d
+#
+# What this overlay does:
+#   - Removes the host-port binding on proxy (it becomes internal-only)
+#   - Adds the Caddy reverse-proxy that handles TLS termination
+#   - Adds persistent volumes for Caddy's certificate store and config
+
+services:
+  proxy:
+    # Remove the host-port binding; Caddy reaches proxy via the internal network.
+    ports: !reset []
+    expose:
+      - "8080"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    labels:
+      com.outpost.role: caddy
+    depends_on:
+      - proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      DOMAIN: ${DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:2019/config/"]
+      interval: 10s
+      timeout: 2s
+      retries: 5
+
+volumes:
+  caddy_data:
+  caddy_config:

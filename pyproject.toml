@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "outpost"
+version = "0.1.0"
+description = "Outpost — the edge sidecar for AI agents. Drop a YAML, get a hardened proxy in front of any API."
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Outpost contributors" }]
+keywords = ["proxy", "sidecar", "api-gateway", "ai-agent", "rate-limit", "oauth", "outpost"]
+
+dependencies = [
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.32.0",
+    "httpx[http2]==0.27.2",
+    "redis[hiredis]==5.1.1",
+    "pydantic==2.10.4",
+    "pydantic-settings==2.7.0",
+    "pyyaml==6.0.3",
+]
+
+[project.optional-dependencies]
+cli = [
+    "click>=8.1",
+    "questionary>=2.0",
+    "rich>=13.7",
+]
+
+[project.scripts]
+outpost = "outpost_cli.main:cli"
+
+[dependency-groups]
+dev = [
+    "ruff==0.7.4",
+    "pyright==1.1.389",
+    "pytest==8.3.3",
+    "pytest-asyncio==0.24.0",
+]
+
+[tool.uv]
+package = true
+
+[tool.hatch.build.targets.wheel]
+packages = ["app", "outpost_cli"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["app/**/__pycache__"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "B",    # flake8-bugbear
+    "UP",   # pyupgrade
+    "SIM",  # flake8-simplify
+    "RUF",  # ruff-specific
+]
+ignore = [
+    "E501",   # line length — already enforced by formatter
+    "B008",   # function calls in defaults (FastAPI Depends pattern)
+    "SIM108", # ternary preference — sometimes if/else is clearer
+]
+
+[tool.ruff.lint.per-file-ignores]
+"app/auth/modules/*.py" = ["F401"]  # AuthModule Protocol referenced indirectly
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+[tool.pyright]
+include = ["app", "outpost_cli"]
+exclude = [
+    "**/__pycache__",
+    "**/.venv",
+    ".ruff_cache",
+]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+useLibraryCodeForTypes = true
+reportMissingImports = "error"
+reportMissingTypeStubs = false
+reportUnusedImport = "warning"
+reportImplicitOverride = false

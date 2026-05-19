@@ -1,0 +1,28 @@
+# Host policy. Lookup is by source IP, longest-prefix CIDR match.
+# `can_call_sensitive: true` is required for any endpoint marked `sensitive: true`
+# in its provider YAML. Read-only endpoints are allowed for everyone matched here.
+# Unmatched IPs get 403.
+#
+# Backward compatibility: `can_trade` is still read as an alias for can_call_sensitive
+# but will log a deprecation warning. Migrate to can_call_sensitive.
+
+hosts:
+  - id: research-agent
+    cidrs: ["10.0.1.0/24"]
+    can_call_sensitive: false
+    description: "Read-only research / analytics agents"
+
+  - id: backtest-runner
+    cidrs: ["10.0.2.5/32", "10.0.2.6/32"]
+    can_call_sensitive: false
+    description: "Backtesting workers — read historical + live data only"
+
+  - id: execution-agent
+    cidrs: ["10.0.3.10/32"]
+    can_call_sensitive: true
+    description: "Sole host permitted to invoke sensitive (write/trade) endpoints"
+
+  - id: localhost-dev
+    cidrs: ["127.0.0.1/32", "::1/128"]
+    can_call_sensitive: true
+    description: "Local development"

@@ -1,0 +1,119 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  docker:
+    name: Build & push Docker image to GHCR
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/outpost
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=semver,pattern={{major}}
+            type=raw,value=latest
+          labels: |
+            org.opencontainers.image.title=Outpost
+            org.opencontainers.image.description=The edge sidecar for AI agents
+            org.opencontainers.image.licenses=MIT
+
+      - name: Build & push
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          platforms: linux/amd64,linux/arm64
+          cache-from: type=gha,scope=outpost
+          cache-to: type=gha,mode=max,scope=outpost
+
+  release-notes:
+    name: Publish release notes
+    needs: docker
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Generate notes
+        id: notes
+        run: |
+          PREV=$(git tag --sort=-version:refname | grep -v "^${{ github.ref_name }}$" | head -1)
+          if [ -z "$PREV" ]; then
+            COMMITS=$(git log --oneline -20)
+          else
+            COMMITS=$(git log --oneline "${PREV}..HEAD")
+          fi
+
+          cat > /tmp/notes.md <<EOF
+          ## Outpost ${{ github.ref_name }}
+
+          ### Docker image
+
+          \`\`\`bash
+          docker pull ghcr.io/${{ github.repository_owner }}/outpost:${{ github.ref_name }}
+          \`\`\`
+
+          Multi-arch (linux/amd64, linux/arm64). Also tagged \`latest\`.
+
+          ### Install in one command
+
+          \`\`\`bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/scripts/install.sh | bash
+          \`\`\`
+
+          ### Commits since ${PREV:-the beginning}
+
+          \`\`\`
+          ${COMMITS}
+          \`\`\`
+          EOF
+
+          echo "body=/tmp/notes.md" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: "Outpost ${{ github.ref_name }}"
+          body_path: ${{ steps.notes.outputs.body }}
+          draft: false
+          prerelease: false

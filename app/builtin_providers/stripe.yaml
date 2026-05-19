@@ -1,0 +1,13 @@
+name: stripe
+base_url: https://api.stripe.com
+description: "Stripe payments API — example of the 3-line transparent provider"
+docs_url: https://stripe.com/docs/api
+
+enabled: false   # set enabled: true and provide STRIPE_SECRET_KEY to activate
+
+auth:
+  type: bearer_static
+  env: STRIPE_SECRET_KEY
+
+default_headers:
+  Stripe-Version: "2024-06-20"

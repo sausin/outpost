@@ -1,0 +1,82 @@
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+htmlcov/
+.tox/
+.nox/
+.coverage
+.coverage.*
+.cache
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.pytype/
+nosetests.xml
+coverage.xml
+*.cover
+
+# ── Virtual environments ──────────────────────────────────────────────
+.venv/
+venv/
+env/
+ENV/
+.python-version
+
+# ── uv ────────────────────────────────────────────────────────────────
+# uv.lock IS committed (reproducible installs) — only ignore caches.
+.uv_cache/
+
+# ── Secrets & operator config ─────────────────────────────────────────
+# Never commit the operator's real .env — it holds API keys and tokens.
+.env
+.env.local
+.env.*.local
+
+# Backups produced by `make backup` contain a Redis dump that may include
+# minted access tokens. Keep them off the public repo.
+backups/
+
+# ── IDE / editor ──────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Build & deploy artifacts ──────────────────────────────────────────
+*.log
+*.pid
+*.seed
+*.pid.lock
+
+# Caddy provisions certs and config into named volumes; if someone bind-
+# mounts those locally for debugging, don't commit the contents.
+caddy_data/
+caddy_config/
+
+# ── Local provider overrides ──────────────────────────────────────────
+# If an operator drops custom providers via EXTRA_PROVIDERS_DIR in the
+# repo, ignore them by convention so they don't get force-merged.
+my-providers/
+custom-providers/
+
+# ── OS-generated ──────────────────────────────────────────────────────
+.AppleDouble
+.LSOverride
+Icon
+
+# ── Misc ──────────────────────────────────────────────────────────────
+*.tar.gz
+*.zip
+node_modules/

@@ -1,0 +1,15 @@
+{
+    email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+    reverse_proxy proxy:8080 {
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Proto {scheme}
+    }
+    encode gzip zstd
+    log {
+        output stdout
+        format json
+    }
+}

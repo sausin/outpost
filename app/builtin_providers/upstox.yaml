@@ -1,0 +1,70 @@
+name: upstox
+base_url: https://api.upstox.com
+description: "Upstox Trading API — Indian stockbroker REST API (v2/v3)"
+docs_url: https://upstox.com/developer/api-documentation/open-api
+
+enabled: true
+
+default_headers:
+  Accept: application/json
+
+auth:
+  type: bearer_redis
+  redis_key: upstox:token
+  env_seed: UPSTOX_ACCESS_TOKEN
+  header: Authorization
+  prefix: "Bearer "
+  invalidate_on: [401]
+  invalidate_on_body_codes:
+    json_path: "errors[].errorCode"
+    codes: ["UDAPI100050"]
+
+forwarding:
+  mode: allowlist
+  allow:
+    # Orders (writes — sensitive)
+    - {method: POST,   pattern: "/v3/order/place",              category: orders, sensitive: true}
+    - {method: PUT,    pattern: "/v3/order/modify",             category: orders, sensitive: true}
+    - {method: DELETE, pattern: "/v3/order/cancel",             category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v2/order/multi/place",        category: orders, sensitive: true}
+    - {method: DELETE, pattern: "/v2/order/multi/cancel",       category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v2/order/positions/exit",     category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v2/order/place",              category: orders, sensitive: true}
+    - {method: PUT,    pattern: "/v2/order/modify",             category: orders, sensitive: true}
+    - {method: DELETE, pattern: "/v2/order/cancel",             category: orders, sensitive: true}
+    - {method: PUT,    pattern: "/v2/portfolio/convert-position", category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v2/user/kill-switch",         category: orders, sensitive: true}
+    # Order reads
+    - {method: GET,    pattern: "/v2/order/retrieve-all",                      category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/history",                           category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/details",                           category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/trades/get-trades-for-day",         category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/trades",                            category: non_trading, cache_ttl: 2}
+    # Market data
+    - {method: GET,    pattern: "/v3/market-quote/ohlc",   category: live_data, cache_ttl: 2}
+    - {method: GET,    pattern: "/v3/market-quote/ltp",    category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v2/market-quote/quotes", category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v2/market-quote/ohlc",   category: live_data, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/market-quote/ltp",    category: live_data, cache_ttl: 1}
+    # Options
+    - {method: GET,    pattern: "/v2/option/chain",    category: live_data,   cache_ttl: 1}
+    - {method: GET,    pattern: "/v2/option/contract", category: non_trading, cache_ttl: 300}
+    # Historical
+    - {method: GET,    pattern: "/v2/historical-candle/intraday/**", category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/historical-candle/**",          category: non_trading, cache_ttl: 300}
+    # Portfolio / funds
+    - {method: GET,    pattern: "/v3/portfolio/mtf-positions",       category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v3/user/get-funds-and-margin",     category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v2/portfolio/long-term-holdings",   category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v2/portfolio/short-term-positions", category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v2/user/get-funds-and-margin",      category: non_trading, cache_ttl: 5}
+    # User
+    - {method: GET,    pattern: "/v2/user/profile",         category: non_trading, cache_ttl: 30}
+    - {method: GET,    pattern: "/v2/user/kill-switch",     category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/user/payments/payin",  category: non_trading, cache_ttl: 10}
+    - {method: GET,    pattern: "/v2/user/payments/payout", category: non_trading, cache_ttl: 10}
+
+  rate_limits:
+    orders:      [{capacity: 10, window_ms: 1000}, {capacity: 500, window_ms: 60000}, {capacity: 2000, window_ms: 1800000}]
+    live_data:   [{capacity: 50, window_ms: 1000}, {capacity: 500, window_ms: 60000}, {capacity: 2000, window_ms: 1800000}]
+    non_trading: [{capacity: 50, window_ms: 1000}, {capacity: 500, window_ms: 60000}, {capacity: 2000, window_ms: 1800000}]

@@ -1,0 +1,41 @@
+services:
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1 --appendonly no --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    labels:
+      com.outpost.role: redis
+    ports: ["6379:6379"]
+    volumes:
+      - outpost_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+  proxy:
+    # Pulls the published image by default; falls back to local build if
+    # the image is unavailable (e.g. for contributors hacking on source).
+    # Override the tag via OUTPOST_IMAGE in .env to pin a specific version.
+    image: ${OUTPOST_IMAGE:-ghcr.io/sausin/outpost:latest}
+    build: .
+    restart: unless-stopped
+    labels:
+      com.outpost.role: proxy
+    depends_on:
+      redis:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      # Override PROVIDERS_DIR if you want to use external definitions instead.
+      # EXTRA_PROVIDERS_DIR: /custom-providers
+    ports: ["8080:8080"]
+    volumes:
+      - ./hosts.yaml:/app/hosts.yaml:ro
+      # Uncomment to drop custom provider YAMLs without rebuilding the image:
+      # - ./my-providers:/custom-providers:ro
+
+volumes:
+  outpost_redis_data:

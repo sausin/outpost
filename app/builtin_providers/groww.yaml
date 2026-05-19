@@ -1,0 +1,87 @@
+name: groww
+base_url: https://api.groww.in
+description: "Groww Trading API — Indian stockbroker REST API"
+docs_url: https://groww.in/trade-api/docs
+
+enabled: true
+
+default_headers:
+  X-API-VERSION: "1.0"
+  Accept: application/json
+
+# ─── Authentication ────────────────────────────────────────────────────
+# Groww supports three auth flows. Pick the one matching the credentials
+# you generated on the Groww Cloud API Keys dashboard. ONLY ONE `auth:`
+# block should be uncommented at a time.
+#
+# Flows #2 and #3 both require you to click "Approve" on the Groww dashboard
+# ONCE PER DAY. After that, the plugin auto-mints tokens for the rest of the
+# day without further interaction.
+
+# ── Flow 2 (DEFAULT): API key + secret checksum ────────────────────────
+# Set GROWW_API_KEY and GROWW_API_SECRET in .env, then `docker compose up`.
+auth:
+  type: plugin
+  module: app.plugins.groww_approval_mint:GrowwApprovalMintAuth
+  config:
+    api_key_env: GROWW_API_KEY
+    api_secret_env: GROWW_API_SECRET
+    mint_path: /v1/token/api/access
+    invalidate_on: [401]
+
+# ── Flow 3 (ALTERNATIVE): API key + TOTP authenticator ─────────────────
+# Best for fully unattended automation. Requires you to scan the Groww TOTP
+# QR into an authenticator app and put the base32 seed in GROWW_TOTP_SEED.
+# auth:
+#   type: plugin
+#   module: app.plugins.groww_totp_mint:GrowwTotpMintAuth
+#   config:
+#     api_key_env: GROWW_API_KEY
+#     totp_seed_env: GROWW_TOTP_SEED
+#     mint_path: /v1/token/api/access
+#     invalidate_on: [401]
+
+# ── Flow 1 (MANUAL): operator pastes a daily access token ──────────────
+# Generate the token from the Groww dashboard each day and either set
+# GROWW_ACCESS_TOKEN in .env (restart required) or `SET groww:token <value>`
+# in Redis (no restart). No plugin needed for this flow.
+# auth:
+#   type: bearer_redis
+#   redis_key: groww:token
+#   env_seed: GROWW_ACCESS_TOKEN
+#   header: Authorization
+#   prefix: "Bearer "
+#   invalidate_on: [401]
+
+forwarding:
+  mode: allowlist
+  allow:
+    # Order writes (sensitive)
+    - {method: POST,   pattern: "/v1/order/create",  category: orders,      sensitive: true}
+    - {method: POST,   pattern: "/v1/order/modify",  category: orders,      sensitive: true}
+    - {method: POST,   pattern: "/v1/order/cancel",  category: orders,      sensitive: true}
+    - {method: POST,   pattern: "/v1/smart-order",   category: orders,      sensitive: true}
+    - {method: PUT,    pattern: "/v1/smart-order",   category: orders,      sensitive: true}
+    - {method: DELETE, pattern: "/v1/smart-order",   category: orders,      sensitive: true}
+    # Order reads
+    - {method: GET,    pattern: "/v1/order/detail/**", category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/order/list",      category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/order/trades",    category: non_trading, cache_ttl: 2}
+    # Live data
+    - {method: GET,    pattern: "/v1/live-data/quote", category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v1/live-data/ltp",   category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v1/live-data/ohlc",  category: live_data, cache_ttl: 2}
+    # Portfolio
+    - {method: GET,    pattern: "/v1/positions",   category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v1/holdings",    category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v1/margin",      category: non_trading, cache_ttl: 5}
+    # Historical & instruments
+    - {method: GET,    pattern: "/v1/historical/**",   category: non_trading, cache_ttl: 300}
+    - {method: GET,    pattern: "/v1/instruments",     category: non_trading, cache_ttl: 86400}
+    # User
+    - {method: GET,    pattern: "/v1/user/**",      category: non_trading, cache_ttl: 5}
+
+  rate_limits:
+    orders:      [{capacity: 10, window_ms: 1000}, {capacity: 250, window_ms: 60000}]
+    live_data:   [{capacity: 10, window_ms: 1000}, {capacity: 300, window_ms: 60000}]
+    non_trading: [{capacity: 20, window_ms: 1000}, {capacity: 500, window_ms: 60000}]

@@ -1,0 +1,16 @@
+name: openai
+base_url: https://api.openai.com
+description: "OpenAI API — example of bearer_static with transparent forwarding"
+docs_url: https://platform.openai.com/docs/api-reference
+
+enabled: false   # set enabled: true and provide OPENAI_API_KEY to activate
+
+auth:
+  type: bearer_static
+  env: OPENAI_API_KEY
+
+forwarding:
+  mode: transparent
+  default_cache_ttl: 0      # don't cache (model outputs are non-deterministic)
+  rate_limits:
+    default: [{capacity: 50, window_ms: 1000}, {capacity: 500, window_ms: 60000}]
