@@ -48,7 +48,9 @@ def prompt_none() -> dict:
 
 def prompt_bearer_static(provider_name: str = "") -> dict:
     """Authorization: Bearer $ENV — for OpenAI, Stripe, Anthropic, etc."""
-    default_env = suggest_env_var(provider_name, "SECRET_KEY") if provider_name else "API_SECRET_KEY"
+    default_env = (
+        suggest_env_var(provider_name, "SECRET_KEY") if provider_name else "API_SECRET_KEY"
+    )
     env = questionary.text(
         "Env var holding the bearer token:",
         default=default_env,
@@ -103,7 +105,9 @@ def prompt_bearer_redis(provider_name: str = "") -> dict:
     if env_seed is None:
         raise KeyboardInterrupt
 
-    header = questionary.text("Header name:", default="Authorization", validate=validate_header_name).ask()
+    header = questionary.text(
+        "Header name:", default="Authorization", validate=validate_header_name
+    ).ask()
     if header is None:
         raise KeyboardInterrupt
 
@@ -462,14 +466,18 @@ def prompt_plugin() -> dict:
         raise KeyboardInterrupt
 
     config: dict = {}
-    add_config = questionary.confirm("Add config key/value pairs for the plugin?", default=True).ask()
+    add_config = questionary.confirm(
+        "Add config key/value pairs for the plugin?", default=True
+    ).ask()
     if add_config is None:
         raise KeyboardInterrupt
 
     if add_config:
         from rich.console import Console as C
 
-        C().print("  [dim]Enter config keys the plugin expects (e.g. api_key_env, auth_mode).[/dim]")
+        C().print(
+            "  [dim]Enter config keys the plugin expects (e.g. api_key_env, auth_mode).[/dim]"
+        )
         while True:
             key = questionary.text(
                 f"Config key (blank to finish, {len(config)} added):",

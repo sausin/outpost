@@ -67,7 +67,9 @@ def print_step(console: Console, step: int, total: int, title: str) -> None:
 
 def print_success(console: Console, path: str, env_vars: list[str], provider_name: str) -> None:
     """Print the post-save next-steps panel."""
-    env_lines = "\n".join(f"       {v}=..." for v in env_vars) if env_vars else "       (none detected)"
+    env_lines = (
+        "\n".join(f"       {v}=..." for v in env_vars) if env_vars else "       (none detected)"
+    )
     body = (
         f"[green]✓ Saved to {path}[/green]\n\n"
         "[bold]Next steps:[/bold]\n"
@@ -76,7 +78,7 @@ def print_success(console: Console, path: str, env_vars: list[str], provider_nam
         "  2. (Re)start the proxy:\n"
         "       docker compose restart proxy\n"
         "  3. Test it:\n"
-        f"       curl -H \"X-Provider: {provider_name}\" http://localhost:8080/<your-path>"
+        f'       curl -H "X-Provider: {provider_name}" http://localhost:8080/<your-path>'
     )
     console.print(Panel(body, border_style="green", padding=(1, 2)))
 

@@ -166,7 +166,9 @@ def _collect_allow_rules(console: Console) -> list[dict]:
             raise KeyboardInterrupt
         if not add_more:
             if not rules:
-                console.print("  [yellow]Warning: no allow rules — all requests will be blocked.[/yellow]")
+                console.print(
+                    "  [yellow]Warning: no allow rules — all requests will be blocked.[/yellow]"
+                )
             break
 
         method = questionary.select("HTTP method:", choices=METHOD_CHOICES).ask()
@@ -222,7 +224,9 @@ def _collect_allow_rules(console: Console) -> list[dict]:
 
 
 def _collect_deny_patterns(console: Console) -> list[str]:
-    add_deny = questionary.confirm("Add deny patterns to explicitly block paths?", default=False).ask()
+    add_deny = questionary.confirm(
+        "Add deny patterns to explicitly block paths?", default=False
+    ).ask()
     if add_deny is None:
         raise KeyboardInterrupt
     if not add_deny:
@@ -322,7 +326,9 @@ def _step4_rate_limits(
         raise KeyboardInterrupt
 
     if use_defaults:
-        return {"default": [{"capacity": 50, "window_ms": 1000}, {"capacity": 500, "window_ms": 60000}]}
+        return {
+            "default": [{"capacity": 50, "window_ms": 1000}, {"capacity": 500, "window_ms": 60000}]
+        }
 
     categories: list[str] = ["default"]
     if mode == "allowlist" and allow_rules:
@@ -348,9 +354,7 @@ def _step4_rate_limits(
 def _step5_default_headers(console: Console) -> dict[str, str]:
     print_step(console, 5, 6, "Default headers")
 
-    console.print(
-        "  [dim]Common examples: Accept: application/json  |  X-API-VERSION: 1.0[/dim]"
-    )
+    console.print("  [dim]Common examples: Accept: application/json  |  X-API-VERSION: 1.0[/dim]")
     add = questionary.confirm(
         "Add default headers sent on every forwarded request?",
         default=False,
@@ -380,9 +384,7 @@ def _step5_default_headers(console: Console) -> dict[str, str]:
     return headers
 
 
-def _step6_preview_save(
-    console: Console, provider_data: dict, provider_name: str
-) -> bool:
+def _step6_preview_save(console: Console, provider_data: dict, provider_name: str) -> bool:
     print_step(console, 6, 6, "Preview & save")
 
     yaml_str = build_yaml(provider_data)
@@ -390,9 +392,7 @@ def _step6_preview_save(
 
     target = PROVIDERS_DIR / f"{provider_name}.yaml"
     if target.exists():
-        console.print(
-            f"\n  [yellow]Warning: {target} already exists.[/yellow]"
-        )
+        console.print(f"\n  [yellow]Warning: {target} already exists.[/yellow]")
         overwrite = questionary.confirm("Overwrite existing file?", default=False).ask()
         if overwrite is None:
             raise KeyboardInterrupt
@@ -455,7 +455,9 @@ def run_wizard() -> None:
             forwarding["deny"] = deny_patterns
 
         # only include rate_limits when non-default
-        default_rl = {"default": [{"capacity": 50, "window_ms": 1000}, {"capacity": 500, "window_ms": 60000}]}
+        default_rl = {
+            "default": [{"capacity": 50, "window_ms": 1000}, {"capacity": 500, "window_ms": 60000}]
+        }
         if rate_limits != default_rl or mode != "transparent":
             forwarding["rate_limits"] = rate_limits
 
