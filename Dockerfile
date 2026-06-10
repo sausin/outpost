@@ -77,4 +77,4 @@ LABEL org.opencontainers.image.title="Outpost" \
       org.opencontainers.image.documentation="https://github.com/sausin/outpost#readme"
 
 ENTRYPOINT ["/sbin/tini", "--"]
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]
+CMD ["uvicorn", "app.python.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "2"]

@@ -69,7 +69,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"app/auth/modules/*.py" = ["F401"]  # AuthModule Protocol referenced indirectly
+"app/python/auth/modules/*.py" = ["F401"]  # AuthModule Protocol referenced indirectly
 
 [tool.ruff.format]
 quote-style = "double"

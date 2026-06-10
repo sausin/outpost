@@ -1,0 +1,16 @@
+# Wrangler reads .dev.vars during `wrangler dev` only — never deployed.
+# Copy to .dev.vars and fill in for local Workers smoke tests.  .dev.vars itself
+# is gitignored (.dockerignored is handled by the Node Dockerfile separately).
+#
+# Production secrets should be set via `wrangler secret put STRIPE_SECRET_KEY`
+# etc. — NEVER commit them and NEVER put them in wrangler.toml's [vars] block.
+
+DEFAULT_PROVIDER=stripe
+
+# ── Provider credentials (only what your enabled providers need) ──────────
+STRIPE_SECRET_KEY=sk_test_dummy_for_local_only
+OPENAI_API_KEY=
+GROWW_API_KEY=
+GROWW_API_SECRET=
+GROWW_TOTP_SEED=
+UPSTOX_ACCESS_TOKEN=

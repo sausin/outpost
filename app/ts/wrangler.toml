@@ -1,0 +1,56 @@
+name = "outpost"
+main = "src/adapter/workers.ts"
+compatibility_date = "2024-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# Bundle *.yaml files as text strings — used by src/adapter/workers.ts to
+# import the vendored provider definitions and hosts.yaml at build time.
+[[rules]]
+type = "Text"
+globs = ["**/*.yaml"]
+fallthrough = false
+
+# ── KV namespaces ─────────────────────────────────────────────────────────
+# The `id` field is required by wrangler even in local mode, but `wrangler dev`
+# ignores it — KV data is backed by miniflare's local storage at
+# `.wrangler/state/v3/kv/`.  Before `wrangler deploy` (remote), replace each id
+# with the real namespace ID returned by:
+#
+#   wrangler kv namespace create TOKENS
+#   wrangler kv namespace create RATE_LIMIT
+#   wrangler kv namespace create CACHE
+#
+# Each `preview_id` is used by `wrangler dev --remote` and gets a separate
+# namespace from production — typically you create a `_preview` suffix:
+#
+#   wrangler kv namespace create TOKENS --preview
+
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "outpost_tokens_local"
+preview_id = "outpost_tokens_preview"
+
+[[kv_namespaces]]
+binding = "RATE_LIMIT"
+id = "outpost_rate_limit_local"
+preview_id = "outpost_rate_limit_preview"
+
+[[kv_namespaces]]
+binding = "CACHE"
+id = "outpost_cache_local"
+preview_id = "outpost_cache_preview"
+
+# ── Vars ──────────────────────────────────────────────────────────────────
+# Non-secret config baked into the bundle.  For provider credentials, prefer
+# .dev.vars locally (gitignored) and `wrangler secret put NAME` for production.
+
+[vars]
+DEFAULT_PROVIDER = ""
+LOG_LEVEL = "info"
+
+# ── Local development ─────────────────────────────────────────────────────
+# `wrangler dev` listens on this port; override with --port if you need to
+# avoid a clash with the Node adapter (which defaults to 8080).
+[dev]
+port = 8788
+local_protocol = "http"

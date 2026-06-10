@@ -35,10 +35,10 @@ def validate(file: Path) -> None:
     console = Console()
 
     try:
-        from app.providers.schema import ProviderSchema  # type: ignore[import]
+        from app.python.providers.schema import ProviderSchema  # type: ignore[import]
     except ImportError:
         console.print(
-            "[red]Cannot import app.providers.schema — run outpost from the repo root.[/red]"
+            "[red]Cannot import app.python.providers.schema — run outpost from the repo root.[/red]"
         )
         sys.exit(1)
 

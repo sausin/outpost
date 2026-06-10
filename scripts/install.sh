@@ -112,7 +112,21 @@ if [ "$INSTALL_FROM_CWD" = "0" ]; then
   cd "$INSTALL_DIR"
 fi
 
-# ── 3. Mode selection ────────────────────────────────────────────────────────
+# ── 3a. Implementation choice ────────────────────────────────────────────────
+printf "\n"
+printf "Which Outpost runtime image?\n"
+printf "  1) Python  -- mature, full plugin support, what most users want\n"
+printf "  2) TypeScript -- Cloudflare-Workers-compatible Node runtime\n"
+printf "Select [1-2, default 1]: "
+read -r IMPL_CHOICE
+IMPL_CHOICE="${IMPL_CHOICE:-1}"
+
+case "$IMPL_CHOICE" in
+  2) OUTPOST_IMPL="ts" ;;
+  *) OUTPOST_IMPL="python" ;;
+esac
+
+# ── 3b. Mode selection ───────────────────────────────────────────────────────
 printf "\n"
 printf "How will Outpost be reached?\n"
 printf "  1) Internal only      -- sidecar on same network as your agent (no HTTPS)\n"
@@ -197,13 +211,16 @@ case "$ENV_CHOICE" in
     ;;
 esac
 
-# Ensure OUTPOST_MODE is set in .env
-if grep -qE '^OUTPOST_MODE=' .env 2>/dev/null; then
-  # Replace existing
-  sed -i "s/^OUTPOST_MODE=.*/OUTPOST_MODE=${OUTPOST_MODE}/" .env
-else
-  printf '\nOUTPOST_MODE=%s\n' "$OUTPOST_MODE" >> .env
-fi
+# Ensure OUTPOST_MODE + OUTPOST_IMPL are set in .env
+for kv in "OUTPOST_MODE=${OUTPOST_MODE}" "OUTPOST_IMPL=${OUTPOST_IMPL}"; do
+  KEY="${kv%%=*}"
+  VAL="${kv#*=}"
+  if grep -qE "^${KEY}=" .env 2>/dev/null; then
+    sed -i "s/^${KEY}=.*/${KEY}=${VAL}/" .env
+  else
+    printf '%s=%s\n' "$KEY" "$VAL" >> .env
+  fi
+done
 
 if [ "$OUTPOST_MODE" = "public" ]; then
   for kv in "DOMAIN=${DOMAIN}" "ACME_EMAIL=${ACME_EMAIL}"; do

@@ -14,8 +14,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint-and-typecheck:
-    name: Lint, format, type-check
+  python-lint:
+    name: Python — lint, format, type-check
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -33,16 +33,50 @@ jobs:
         run: uv sync --all-extras
 
       - name: Ruff check
-        run: uv run ruff check app/ outpost_cli/
+        run: uv run ruff check app/python outpost_cli
 
       - name: Ruff format check
-        run: uv run ruff format --check app/ outpost_cli/
+        run: uv run ruff format --check app/python outpost_cli
 
       - name: Pyright
-        run: uv run pyright app/ outpost_cli/
+        run: uv run pyright app/python outpost_cli
 
-  docker-build:
-    name: Docker build (verification only)
+  ts-lint:
+    name: TypeScript — typecheck, format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: app/ts/package-lock.json
+
+      - name: Install dependencies
+        working-directory: app/ts
+        run: npm ci
+
+      - name: Typecheck
+        working-directory: app/ts
+        run: npx tsc --noEmit
+
+      - name: Prettier check
+        working-directory: app/ts
+        run: npx prettier --check src/
+
+      - name: Vitest (when tests exist)
+        working-directory: app/ts
+        run: |
+          if grep -q '"test"' package.json && [ -d src ] && find src -name "*.test.ts" -print -quit | grep -q .; then
+            npx vitest run
+          else
+            echo "No tests yet — skipping"
+          fi
+
+  docker-python:
+    name: Python image — build (verification only)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -51,21 +85,52 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Build (no push)
+      - name: Build
         uses: docker/build-push-action@v5
         with:
           context: .
+          file: Dockerfile
           push: false
           load: true
-          tags: outpost:ci
-          cache-from: type=gha,scope=outpost
-          cache-to: type=gha,mode=max,scope=outpost
+          tags: outpost-python:ci
+          cache-from: type=gha,scope=outpost-python
+          cache-to: type=gha,mode=max,scope=outpost-python
 
       - name: Smoke-test image
         run: |
-          docker run --rm --entrypoint sh outpost:ci -c "
+          docker run --rm --entrypoint sh outpost-python:ci -c "
             test -x /opt/venv/bin/uvicorn || exit 1
             test -d /app/app/builtin_providers || exit 1
             id | grep -q 'uid=10001' || exit 1
-            echo 'image OK'
+            echo 'python image OK'
+          "
+
+  docker-ts:
+    name: TypeScript image — build (verification only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: app/ts/Dockerfile
+          push: false
+          load: true
+          tags: outpost-ts:ci
+          cache-from: type=gha,scope=outpost-ts
+          cache-to: type=gha,mode=max,scope=outpost-ts
+
+      - name: Smoke-test image
+        run: |
+          docker run --rm --entrypoint sh outpost-ts:ci -c "
+            test -f /app/dist/node.js || exit 1
+            test -d /app/builtin_providers || exit 1
+            id | grep -q 'uid=10001' || exit 1
+            echo 'ts image OK'
           "

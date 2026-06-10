@@ -22,7 +22,8 @@ default_headers:
 # Set GROWW_API_KEY and GROWW_API_SECRET in .env, then `docker compose up`.
 auth:
   type: plugin
-  module: app.plugins.groww_approval_mint:GrowwApprovalMintAuth
+  module: app.python.plugins.groww_approval_mint:GrowwApprovalMintAuth
+  module_ts: plugins/groww_approval_mint.ts:GrowwApprovalMintAuth
   config:
     api_key_env: GROWW_API_KEY
     api_secret_env: GROWW_API_SECRET
@@ -34,7 +35,8 @@ auth:
 # QR into an authenticator app and put the base32 seed in GROWW_TOTP_SEED.
 # auth:
 #   type: plugin
-#   module: app.plugins.groww_totp_mint:GrowwTotpMintAuth
+#   module: app.python.plugins.groww_totp_mint:GrowwTotpMintAuth
+#   module_ts: plugins/groww_totp_mint.ts:GrowwTotpMintAuth
 #   config:
 #     api_key_env: GROWW_API_KEY
 #     totp_seed_env: GROWW_TOTP_SEED

@@ -40,7 +40,7 @@ You need Redis running somewhere (`brew install redis` / `apt install redis`
 ```bash
 uv sync                                              # install runtime + dev deps from uv.lock
 cp .env.example .env
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8080 --workers 2
+uv run uvicorn app.python.main:app --host 0.0.0.0 --port 8080 --workers 2
 ```
 
 The `uv sync` step also installs the dev tools (ruff, pyright, pytest).
