@@ -15,21 +15,32 @@ WORKDIR /build
 
 # Lockfile-first copy → dependency layer cached across source-only changes.
 COPY app/ts/package.json app/ts/package-lock.json ./
+
+# Do NOT pass --ignore-scripts here: esbuild (used by tsup, our bundler) ships
+# its native binary via a postinstall script. Skip that and tsup fails at
+# build-time with an unhelpful CJS loader stack trace. Build container is
+# sealed, lockfile pins every dep — this is safe.
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --ignore-scripts
+    npm ci
 
 COPY app/ts/tsconfig.json ./
 COPY app/ts/src ./src
+
+# tsup 8.x: --format esm emits .mjs by default. --no-splitting keeps everything
+# in a single file. We don't generate .d.ts (runtime image doesn't need them).
+# --loader .yaml=text is for workers.ts which imports YAMLs as bundled text;
+# Node's adapter ignores them at runtime but tsup walks the project graph.
 RUN npx tsup src/adapter/node.ts \
       --format esm \
       --outDir dist \
-      --out-extension .js \
-      --dts false \
-      --no-splitting
+      --target node22 \
+      --no-splitting \
+      --loader .yaml=text
 
 # Production-only dependencies into a clean node_modules we'll ship.
+# Runtime doesn't bundle anything, so --ignore-scripts is safe here.
 RUN --mount=type=cache,target=/root/.npm \
-    npm prune --omit=dev
+    npm prune --omit=dev --ignore-scripts
 
 # ─── Stage 2: runtime ──────────────────────────────────────────────────
 FROM node:22-alpine

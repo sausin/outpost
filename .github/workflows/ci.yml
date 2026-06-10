@@ -100,7 +100,8 @@ jobs:
         run: |
           docker run --rm --entrypoint sh outpost-python:ci -c "
             test -x /opt/venv/bin/uvicorn || exit 1
-            test -d /app/app/builtin_providers || exit 1
+            test -d /etc/outpost/providers || exit 1
+            test -f /etc/outpost/hosts.yaml || exit 1
             id | grep -q 'uid=10001' || exit 1
             echo 'python image OK'
           "
@@ -130,7 +131,8 @@ jobs:
         run: |
           docker run --rm --entrypoint sh outpost-ts:ci -c "
             test -f /app/dist/node.js || exit 1
-            test -d /app/builtin_providers || exit 1
+            test -d /etc/outpost/providers || exit 1
+            test -f /etc/outpost/hosts.yaml || exit 1
             id | grep -q 'uid=10001' || exit 1
             echo 'ts image OK'
           "
