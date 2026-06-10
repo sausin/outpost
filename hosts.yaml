@@ -8,6 +8,7 @@
 #                        carry `X-Outpost-Auth: <token>` matching the env
 #                        var's value. Use it for any internet-facing host
 #                        where IP allowlisting alone isn't sufficient.
+#                        Generate tokens with `openssl rand -hex 32`.
 #
 # Unmatched IPs get 403 PROXY_HOST_DENIED.
 # Hosts with PSK + missing/wrong token get 401 PROXY_AUTH_REQUIRED.
@@ -20,22 +21,25 @@ hosts:
   - id: research-agent
     cidrs: ["10.0.1.0/24"]
     can_call_sensitive: false
-    auth_token_env: RESEARCH_AGENT_TOKEN
-    description: "Read-only research / analytics agents (PSK required)"
+    description: "Read-only research / analytics agents"
+    # PRODUCTION: uncomment the next line + add RESEARCH_AGENT_TOKEN to .env
+    # auth_token_env: RESEARCH_AGENT_TOKEN
 
   - id: backtest-runner
     cidrs: ["10.0.2.5/32", "10.0.2.6/32"]
     can_call_sensitive: false
-    auth_token_env: BACKTEST_RUNNER_TOKEN
-    description: "Backtesting workers — read historical + live data only (PSK required)"
+    description: "Backtesting workers — read historical + live data only"
+    # PRODUCTION: uncomment the next line + add BACKTEST_RUNNER_TOKEN to .env
+    # auth_token_env: BACKTEST_RUNNER_TOKEN
 
   - id: execution-agent
     cidrs: ["10.0.3.10/32"]
     can_call_sensitive: true
-    auth_token_env: EXECUTION_AGENT_TOKEN
-    description: "Sole host permitted to invoke sensitive endpoints (PSK required)"
+    description: "Sole host permitted to invoke sensitive endpoints"
+    # PRODUCTION: uncomment the next line + add EXECUTION_AGENT_TOKEN to .env
+    # auth_token_env: EXECUTION_AGENT_TOKEN
 
   - id: localhost-dev
     cidrs: ["127.0.0.1/32", "::1/128"]
     can_call_sensitive: true
-    description: "Local development — no PSK required (omit auth_token_env)"
+    description: "Local development — no PSK required"
