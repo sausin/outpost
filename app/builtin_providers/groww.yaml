@@ -58,30 +58,64 @@ auth:
 forwarding:
   mode: allowlist
   allow:
-    # Order writes (sensitive)
-    - {method: POST,   pattern: "/v1/order/create",  category: orders,      sensitive: true}
-    - {method: POST,   pattern: "/v1/order/modify",  category: orders,      sensitive: true}
-    - {method: POST,   pattern: "/v1/order/cancel",  category: orders,      sensitive: true}
-    - {method: POST,   pattern: "/v1/smart-order",   category: orders,      sensitive: true}
-    - {method: PUT,    pattern: "/v1/smart-order",   category: orders,      sensitive: true}
-    - {method: DELETE, pattern: "/v1/smart-order",   category: orders,      sensitive: true}
-    # Order reads
-    - {method: GET,    pattern: "/v1/order/detail/**", category: non_trading, cache_ttl: 2}
-    - {method: GET,    pattern: "/v1/order/list",      category: non_trading, cache_ttl: 2}
-    - {method: GET,    pattern: "/v1/order/trades",    category: non_trading, cache_ttl: 2}
-    # Live data
-    - {method: GET,    pattern: "/v1/live-data/quote", category: live_data, cache_ttl: 1}
-    - {method: GET,    pattern: "/v1/live-data/ltp",   category: live_data, cache_ttl: 1}
-    - {method: GET,    pattern: "/v1/live-data/ohlc",  category: live_data, cache_ttl: 2}
-    # Portfolio
-    - {method: GET,    pattern: "/v1/positions",   category: non_trading, cache_ttl: 5}
-    - {method: GET,    pattern: "/v1/holdings",    category: non_trading, cache_ttl: 5}
-    - {method: GET,    pattern: "/v1/margin",      category: non_trading, cache_ttl: 5}
-    # Historical & instruments
-    - {method: GET,    pattern: "/v1/historical/**",   category: non_trading, cache_ttl: 300}
-    - {method: GET,    pattern: "/v1/instruments",     category: non_trading, cache_ttl: 86400}
-    # User
-    - {method: GET,    pattern: "/v1/user/**",      category: non_trading, cache_ttl: 5}
+    # ─── Orders — writes (sensitive) ─────────────────────────────────────
+    - {method: POST,   pattern: "/v1/order/create",   category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v1/order/modify",   category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v1/order/cancel",   category: orders, sensitive: true}
+
+    # ─── Smart orders (GTT / OCO) — writes (sensitive) ───────────────────
+    # Real path is /v1/order-advance/* per the docs; the old "/v1/smart-order"
+    # paths we used to allow do not exist on the upstream.
+    - {method: POST,   pattern: "/v1/order-advance/create",      category: orders, sensitive: true}
+    - {method: PUT,    pattern: "/v1/order-advance/modify/**",   category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v1/order-advance/cancel/**",   category: orders, sensitive: true}
+
+    # ─── Orders — reads ──────────────────────────────────────────────────
+    # detail / status / trades all carry {groww_order_id} as a path param
+    # (status/reference uses an operator-supplied order_reference_id).
+    - {method: GET,    pattern: "/v1/order/detail/**",           category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/order/status/reference/**", category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/order/status/**",           category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/order/trades/**",           category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/order/list",                category: non_trading, cache_ttl: 2}
+
+    # Smart-order reads
+    - {method: GET,    pattern: "/v1/order-advance/status/**",   category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/order-advance/list",        category: non_trading, cache_ttl: 2}
+
+    # ─── Live market data ────────────────────────────────────────────────
+    - {method: GET,    pattern: "/v1/live-data/quote",  category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v1/live-data/ltp",    category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v1/live-data/ohlc",   category: live_data, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/live-data/greeks/**", category: live_data, cache_ttl: 2}
+    - {method: GET,    pattern: "/v1/option-chain/**",  category: live_data, cache_ttl: 1}
+
+    # ─── Portfolio ───────────────────────────────────────────────────────
+    - {method: GET,    pattern: "/v1/holdings/user",             category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v1/positions/user",            category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v1/positions/trading-symbol",  category: non_trading, cache_ttl: 5}
+
+    # ─── Margin / funds ──────────────────────────────────────────────────
+    # GET fetches available margin; POST calculates required margin for an
+    # order plan WITHOUT placing it — not sensitive.
+    - {method: GET,    pattern: "/v1/margins/detail/user",       category: non_trading, cache_ttl: 5}
+    - {method: POST,   pattern: "/v1/margins/detail/orders",     category: non_trading, cache_ttl: 0}
+
+    # ─── Historical (backtesting) ────────────────────────────────────────
+    - {method: GET,    pattern: "/v1/historical/expiries",       category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v1/historical/contracts",      category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v1/historical/candles",        category: non_trading, cache_ttl: 300}
+    # Deprecated by Groww — kept for back-compat until clients migrate.
+    - {method: GET,    pattern: "/v1/historical/candle/range",   category: non_trading, cache_ttl: 300}
+
+    # ─── User profile ────────────────────────────────────────────────────
+    - {method: GET,    pattern: "/v1/user/detail",               category: non_trading, cache_ttl: 60}
+
+  # NOTE: the Groww instruments master is at
+  #   https://growwapi-assets.groww.in/instruments/instrument.csv
+  # which is a DIFFERENT host. It can't be served through this provider
+  # (base_url is api.groww.in). For instruments, agents fetch that URL
+  # directly — no auth required, just a plain GET.
 
   rate_limits:
     orders:      [{capacity: 10, window_ms: 1000}, {capacity: 250, window_ms: 60000}]

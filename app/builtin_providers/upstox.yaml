@@ -1,7 +1,7 @@
 name: upstox
 base_url: https://api.upstox.com
 description: "Upstox Trading API — Indian stockbroker REST API (v2/v3)"
-docs_url: https://upstox.com/developer/api-documentation/open-api
+docs_url: https://upstox.com/developer/api-documentation/api-overview
 
 enabled: true
 
@@ -22,47 +22,113 @@ auth:
 forwarding:
   mode: allowlist
   allow:
-    # Orders (writes — sensitive)
+    # ─── Orders — writes (sensitive) ─────────────────────────────────────
     - {method: POST,   pattern: "/v3/order/place",              category: orders, sensitive: true}
     - {method: PUT,    pattern: "/v3/order/modify",             category: orders, sensitive: true}
     - {method: DELETE, pattern: "/v3/order/cancel",             category: orders, sensitive: true}
-    - {method: POST,   pattern: "/v2/order/multi/place",        category: orders, sensitive: true}
-    - {method: DELETE, pattern: "/v2/order/multi/cancel",       category: orders, sensitive: true}
-    - {method: POST,   pattern: "/v2/order/positions/exit",     category: orders, sensitive: true}
     - {method: POST,   pattern: "/v2/order/place",              category: orders, sensitive: true}
     - {method: PUT,    pattern: "/v2/order/modify",             category: orders, sensitive: true}
     - {method: DELETE, pattern: "/v2/order/cancel",             category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v2/order/multi/place",        category: orders, sensitive: true}
+    - {method: DELETE, pattern: "/v2/order/multi/cancel",       category: orders, sensitive: true}
+    - {method: POST,   pattern: "/v2/order/positions/exit",     category: orders, sensitive: true}
+    # Product-type change & kill-switch are sensitive (affect open trades).
     - {method: PUT,    pattern: "/v2/portfolio/convert-position", category: orders, sensitive: true}
     - {method: POST,   pattern: "/v2/user/kill-switch",         category: orders, sensitive: true}
-    # Order reads
-    - {method: GET,    pattern: "/v2/order/retrieve-all",                      category: non_trading, cache_ttl: 2}
-    - {method: GET,    pattern: "/v2/order/history",                           category: non_trading, cache_ttl: 2}
-    - {method: GET,    pattern: "/v2/order/details",                           category: non_trading, cache_ttl: 2}
-    - {method: GET,    pattern: "/v2/order/trades/get-trades-for-day",         category: non_trading, cache_ttl: 2}
-    - {method: GET,    pattern: "/v2/order/trades",                            category: non_trading, cache_ttl: 2}
-    # Market data
-    - {method: GET,    pattern: "/v3/market-quote/ohlc",   category: live_data, cache_ttl: 2}
-    - {method: GET,    pattern: "/v3/market-quote/ltp",    category: live_data, cache_ttl: 1}
-    - {method: GET,    pattern: "/v2/market-quote/quotes", category: live_data, cache_ttl: 1}
-    - {method: GET,    pattern: "/v2/market-quote/ohlc",   category: live_data, cache_ttl: 2}
-    - {method: GET,    pattern: "/v2/market-quote/ltp",    category: live_data, cache_ttl: 1}
-    # Options
-    - {method: GET,    pattern: "/v2/option/chain",    category: live_data,   cache_ttl: 1}
-    - {method: GET,    pattern: "/v2/option/contract", category: non_trading, cache_ttl: 300}
-    # Historical
+    # Static-IP allowlist change is sensitive (affects future auth surface).
+    - {method: PUT,    pattern: "/v2/user/ip",                  category: orders, sensitive: true}
+
+    # ─── Order reads ─────────────────────────────────────────────────────
+    - {method: GET,    pattern: "/v2/order/retrieve-all",                  category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/history",                       category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/details",                       category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/trades/get-trades-for-day",     category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/order/trades",                        category: non_trading, cache_ttl: 2}
+
+    # ─── Live market data (quotes) ───────────────────────────────────────
+    - {method: GET,    pattern: "/v3/market-quote/ohlc",         category: live_data, cache_ttl: 2}
+    - {method: GET,    pattern: "/v3/market-quote/ltp",          category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v3/market-quote/option-greek", category: live_data, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/market-quote/quotes",       category: live_data, cache_ttl: 1}
+    - {method: GET,    pattern: "/v2/market-quote/ohlc",         category: live_data, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/market-quote/ltp",          category: live_data, cache_ttl: 1}
+
+    # ─── Option chain & contract ─────────────────────────────────────────
+    - {method: GET,    pattern: "/v2/option/chain",     category: live_data,   cache_ttl: 1}
+    - {method: GET,    pattern: "/v2/option/contract",  category: non_trading, cache_ttl: 300}
+
+    # ─── Historical candles (intraday + range, both v2 + v3) ─────────────
+    - {method: GET,    pattern: "/v3/historical-candle/intraday/**", category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v3/historical-candle/**",          category: non_trading, cache_ttl: 300}
     - {method: GET,    pattern: "/v2/historical-candle/intraday/**", category: non_trading, cache_ttl: 60}
     - {method: GET,    pattern: "/v2/historical-candle/**",          category: non_trading, cache_ttl: 300}
-    # Portfolio / funds
-    - {method: GET,    pattern: "/v3/portfolio/mtf-positions",       category: non_trading, cache_ttl: 5}
-    - {method: GET,    pattern: "/v3/user/get-funds-and-margin",     category: non_trading, cache_ttl: 5}
-    - {method: GET,    pattern: "/v2/portfolio/long-term-holdings",   category: non_trading, cache_ttl: 5}
-    - {method: GET,    pattern: "/v2/portfolio/short-term-positions", category: non_trading, cache_ttl: 5}
-    - {method: GET,    pattern: "/v2/user/get-funds-and-margin",      category: non_trading, cache_ttl: 5}
-    # User
-    - {method: GET,    pattern: "/v2/user/profile",         category: non_trading, cache_ttl: 30}
-    - {method: GET,    pattern: "/v2/user/kill-switch",     category: non_trading, cache_ttl: 2}
-    - {method: GET,    pattern: "/v2/user/payments/payin",  category: non_trading, cache_ttl: 10}
-    - {method: GET,    pattern: "/v2/user/payments/payout", category: non_trading, cache_ttl: 10}
+
+    # ─── Expired-instrument data (historical futures/options) ────────────
+    - {method: GET,    pattern: "/v2/expired-instruments/historical-candle/**", category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/expired-instruments/future/contract",      category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/expired-instruments/option/contract",      category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/expired-instruments/expiries",             category: non_trading, cache_ttl: 86400}
+
+    # ─── Portfolio / funds ───────────────────────────────────────────────
+    - {method: GET,    pattern: "/v3/portfolio/mtf-positions",      category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v3/user/get-funds-and-margin",    category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v2/portfolio/long-term-holdings", category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v2/portfolio/short-term-positions",category: non_trading, cache_ttl: 5}
+    - {method: GET,    pattern: "/v2/user/get-funds-and-margin",    category: non_trading, cache_ttl: 5}
+
+    # ─── Charges (brokerage calc + margin calc + historical trade charges)
+    # POST on /v2/charges/margin is a calculator — does not place orders.
+    - {method: GET,    pattern: "/v2/charges/brokerage",          category: non_trading, cache_ttl: 60}
+    - {method: POST,   pattern: "/v2/charges/margin",             category: non_trading, cache_ttl: 0}
+    - {method: GET,    pattern: "/v2/charges/historical-trades",  category: non_trading, cache_ttl: 60}
+
+    # ─── Trade P&L reports ───────────────────────────────────────────────
+    - {method: GET,    pattern: "/v2/trade/profit-loss/charges",  category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/trade/profit-loss/data",     category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/trade/profit-loss/metadata", category: non_trading, cache_ttl: 86400}
+
+    # ─── Mutual fund data ────────────────────────────────────────────────
+    - {method: GET,    pattern: "/v2/mf/holdings",       category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/mf/orders/**",      category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/mf/orders",         category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/mf/sips",           category: non_trading, cache_ttl: 60}
+
+    # ─── Market timings + holidays ───────────────────────────────────────
+    - {method: GET,    pattern: "/v2/market/timings/**", category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/market/holidays/**",category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/market/holidays",   category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/market/status/**",  category: non_trading, cache_ttl: 60}
+
+    # ─── Market analytics (OI, max-pain, FII/DII, PCR) ───────────────────
+    - {method: GET,    pattern: "/v2/market/change-oi",  category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/market/oi",         category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/market/max-pain",   category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/market/pcr",        category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/market/dii",        category: non_trading, cache_ttl: 300}
+    - {method: GET,    pattern: "/v2/market/fii",        category: non_trading, cache_ttl: 300}
+
+    # ─── Fundamentals (financial statements + corporate actions) ─────────
+    - {method: GET,    pattern: "/v2/fundamentals/**/balance-sheet",     category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/fundamentals/**/cash-flow",         category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/fundamentals/**/income-statement",  category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/fundamentals/**/key-ratios",        category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/fundamentals/**/share-holdings",    category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/fundamentals/**/corporate-actions", category: non_trading, cache_ttl: 3600}
+    - {method: GET,    pattern: "/v2/fundamentals/**/competitors",       category: non_trading, cache_ttl: 86400}
+    - {method: GET,    pattern: "/v2/fundamentals/**/profile",           category: non_trading, cache_ttl: 86400}
+
+    # ─── News ────────────────────────────────────────────────────────────
+    - {method: GET,    pattern: "/v2/news",              category: non_trading, cache_ttl: 60}
+
+    # ─── Instruments search ──────────────────────────────────────────────
+    - {method: GET,    pattern: "/v2/instruments/search", category: non_trading, cache_ttl: 300}
+
+    # ─── User profile + admin reads ──────────────────────────────────────
+    - {method: GET,    pattern: "/v2/user/profile",          category: non_trading, cache_ttl: 30}
+    - {method: GET,    pattern: "/v2/user/kill-switch",      category: non_trading, cache_ttl: 2}
+    - {method: GET,    pattern: "/v2/user/ip",               category: non_trading, cache_ttl: 60}
+    - {method: GET,    pattern: "/v2/user/payments/payin",   category: non_trading, cache_ttl: 10}
+    - {method: GET,    pattern: "/v2/user/payments/payout",  category: non_trading, cache_ttl: 10}
 
   rate_limits:
     orders:      [{capacity: 10, window_ms: 1000}, {capacity: 500, window_ms: 60000}, {capacity: 2000, window_ms: 1800000}]

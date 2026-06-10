@@ -1,6 +1,18 @@
 .env
 .env.local
 outpost_cli/
+
+# Never copy node_modules into ANY build context — both Dockerfiles do
+# `npm ci` fresh inside the builder stage. Pulls in 200MB+ of cruft if
+# present and would shadow the installed deps anyway.
+**/node_modules/
+
+# Symlinks at app/ts/{builtin_providers,hosts.yaml} are for local
+# wrangler dev only — both Dockerfiles use explicit COPY of the real
+# files into /etc/outpost/{providers,hosts.yaml} and never read these.
+# Excluding them keeps the Python image free of broken-after-COPY links.
+app/ts/builtin_providers
+app/ts/hosts.yaml
 .git
 .gitignore
 .venv

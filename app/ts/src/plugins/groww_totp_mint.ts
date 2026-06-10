@@ -18,6 +18,10 @@
 import type { AuthContext, AuthResult } from "../core/types.ts";
 import type { AuthModule, AuthDeps } from "../auth/types.ts";
 
+// Hardcoded because this plugin is Groww-specific. If `mint_path` in the YAML
+// is already absolute (starts with http(s)://), it's used as-is.
+const GROWW_BASE_URL = "https://api.groww.in";
+
 const TOKEN_KEY = "groww:token";
 const TOKEN_LOCK_KEY = "groww:token:lock";
 const TOKEN_LOCK_TTL_S = 30;
@@ -158,7 +162,11 @@ export class GrowwTotpMintAuth implements AuthModule {
 
   private async mint(): Promise<{ token: string; ttl: number }> {
     const code = await totp(this.totpSeed);
-    const resp = await fetch(this.mintPath, {
+    const url = /^https?:\/\//.test(this.mintPath)
+      ? this.mintPath
+      : `${GROWW_BASE_URL}${this.mintPath.startsWith("/") ? "" : "/"}${this.mintPath}`;
+
+    const resp = await fetch(url, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${this.apiKey}`,

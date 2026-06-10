@@ -1,15 +1,23 @@
+import { PLUGIN_REGISTRY } from "../../plugins/registry.ts";
 import type { AuthContext, AuthResult } from "../../core/types.ts";
-import type { AuthModule, AuthDeps } from "../types.ts";
+import type { AuthDeps, AuthModule } from "../types.ts";
 
 /**
- * Dynamic plugin loader — delegates to a user-supplied AuthModule class.
+ * Static-registry plugin loader.
  *
- * Security constraint: only modules under `app/ts/src/plugins/` are
- * importable. Paths starting with `../` or absolute paths are rejected.
+ * Bundled targets (Cloudflare Workers, the Node tsup bundle) cannot resolve
+ * dynamic `import(variablePath)` — esbuild needs all imports statically.
+ * So we keep an explicit `PLUGIN_REGISTRY` of known plugin classes in
+ * `src/plugins/registry.ts`, and look up by the YAML's `module_ts:` (or
+ * `module:` for Python-only YAMLs) string key.
+ *
+ * Adding a new plugin: drop the file in `src/plugins/`, import + register it
+ * in `src/plugins/registry.ts`, then reference the registry key from YAML.
  *
  * Config:
- *   module: "plugins/groww_totp_mint.ts:GrowwTotpMintAuth"
- *   config: { ... }   ← forwarded to inner.fromConfig()
+ *   module:    "<python-dotted-path>:Class"    (Python runtime reads this)
+ *   module_ts: "<ts-registry-key>:Class"       (TS runtime reads this — prefer)
+ *   config:    { ... }   forwarded to inner.fromConfig()
  */
 export class PluginAuth implements AuthModule {
   static readonly typeName = "plugin";
@@ -20,51 +28,21 @@ export class PluginAuth implements AuthModule {
     config: Record<string, unknown>,
     deps: AuthDeps,
   ): Promise<PluginAuth> {
-    // Dual-impl YAMLs may carry a `module_ts:` override pointing at the TS path
-    // alongside `module:` (which carries the Python dotted path). Prefer the
-    // TS-specific one when present; otherwise fall back to `module`.
+    // Prefer the TS-specific override; fall back to the shared `module:` key.
     const moduleSpec = config["module_ts"] ?? config["module"];
     if (typeof moduleSpec !== "string" || !moduleSpec.includes(":")) {
       throw new Error(
-        `PluginAuth: 'module' (or 'module_ts') must be 'path/to/mod.ts:ClassName', got ${JSON.stringify(moduleSpec)}.`,
+        `PluginAuth: 'module' (or 'module_ts') must be 'registry-key:ClassName', got ${JSON.stringify(moduleSpec)}.`,
       );
     }
 
-    const colonIdx = moduleSpec.indexOf(":");
-    const modulePath = moduleSpec.slice(0, colonIdx);
-    const className = moduleSpec.slice(colonIdx + 1);
-
-    // Security: reject relative traversal and absolute paths.
-    if (modulePath.startsWith("../") || modulePath.startsWith("/")) {
+    const factory = PLUGIN_REGISTRY[moduleSpec];
+    if (!factory) {
       throw new Error(
-        `PluginAuth: module path '${modulePath}' is not allowed. Only paths under plugins/ are importable.`,
+        `PluginAuth: unknown plugin '${moduleSpec}'. ` +
+          `Registered plugins: ${Object.keys(PLUGIN_REGISTRY).sort().join(", ") || "(none)"}. ` +
+          `Add new plugins to app/ts/src/plugins/registry.ts.`,
       );
-    }
-    if (!modulePath.startsWith("plugins/")) {
-      throw new Error(
-        `PluginAuth: module path '${modulePath}' must start with 'plugins/'.`,
-      );
-    }
-
-    let mod: Record<string, unknown>;
-    try {
-      // Dynamic import relative to this file's location (src/auth/modules/).
-      // Plugins live at src/plugins/, so we go up two levels.
-      mod = (await import(`../../${modulePath}`)) as Record<string, unknown>;
-    } catch (err) {
-      throw new Error(
-        `PluginAuth: cannot import module '${modulePath}': ${String(err)}`,
-      );
-    }
-
-    const klass = mod[className];
-    if (klass === undefined || klass === null) {
-      throw new Error(
-        `PluginAuth: class '${className}' not found in module '${modulePath}'.`,
-      );
-    }
-    if (typeof klass !== "function") {
-      throw new Error(`PluginAuth: '${moduleSpec}' is not a class/function.`);
     }
 
     const innerConfig =
@@ -74,19 +52,6 @@ export class PluginAuth implements AuthModule {
       !Array.isArray(config["config"])
         ? (config["config"] as Record<string, unknown>)
         : {};
-
-    const factory = klass as {
-      fromConfig?: (
-        cfg: Record<string, unknown>,
-        deps: AuthDeps,
-      ) => AuthModule | Promise<AuthModule>;
-    };
-
-    if (typeof factory.fromConfig !== "function") {
-      throw new Error(
-        `PluginAuth: '${moduleSpec}' does not have a static fromConfig() method.`,
-      );
-    }
 
     let inner: AuthModule;
     try {

@@ -54,8 +54,11 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Application code.
-COPY --chown=app:app app ./app
+# Python application code — selective COPY so we never accidentally pull
+# in app/ts/ (TS source + node_modules + symlinks), keeping the Python
+# image minimal and free of dead symlinks pointing at TS-side paths.
+COPY --chown=app:app app/__init__.py ./app/__init__.py
+COPY --chown=app:app app/python ./app/python
 
 # Vendored config — baked in as defaults so `docker run` works without volume
 # mounts. Compose deployments shadow these with host-side mounts at the same
