@@ -74,8 +74,10 @@ function fakeRateLimits(
 
 async function makeApp(
   opts: {
+    hostsYaml?: string;
     cacheStore?: CacheStore;
     rateLimits?: RateLimitBackend;
+    extraEnv?: Record<string, string>;
   } = {},
 ) {
   const deps = await buildAppDeps({
@@ -86,9 +88,10 @@ async function makeApp(
       PROXY_PORT: "",
       LOG_LEVEL: "",
       STRIPE_KEY: "sk_test_abc",
+      ...(opts.extraEnv ?? {}),
     },
     defs: new Map([["stripe", STRIPE_DEF]]),
-    hostsYaml: HOSTS_YAML,
+    hostsYaml: opts.hostsYaml ?? HOSTS_YAML,
     tokenStorage: new InMemoryStorage(),
     cache: fakeCache(opts.cacheStore),
     rateLimits: opts.rateLimits ?? fakeRateLimits(),
@@ -110,6 +113,14 @@ function req(
       ...opts.headers,
     },
   });
+}
+
+/** Encode a string as base64 the same way bytesToBase64() in index.ts does. */
+function strToBase64(s: string): string {
+  const bytes = new TextEncoder().encode(s);
+  let binary = "";
+  for (const b of bytes) binary += String.fromCharCode(b);
+  return btoa(binary);
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -172,7 +183,6 @@ describe("integration: proxy_flow", () => {
   });
 
   test("sensitive path + non-sensitive host returns 403 PROXY_SENSITIVE_DENIED", async () => {
-    // Build app with a hosts.yaml that disallows sensitive calls
     const depsInput = {
       env: {
         DEFAULT_PROVIDER: "",
@@ -212,9 +222,10 @@ hosts:
     expect(body.error.code).toBe("PROXY_SENSITIVE_DENIED");
   });
 
-  test("successful proxy returns upstream body with X-Proxy-Provider header", async () => {
+  test("successful proxy returns upstream body bytes with correct content-type", async () => {
+    const upstreamJson = JSON.stringify({ id: "ch_123", amount: 100 });
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response(JSON.stringify({ id: "ch_123", amount: 100 }), {
+      new Response(upstreamJson, {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -226,14 +237,15 @@ hosts:
     const res = await app.request(r);
     expect(res.status).toBe(200);
     expect(res.headers.get("x-proxy-provider")).toBe("stripe");
+    expect(res.headers.get("content-type")).toBe("application/json");
     const body = (await res.json()) as { id: string };
     expect(body.id).toBe("ch_123");
   });
 
-  test("cache hit returns cached body with X-Proxy-Cache: HIT after a MISS", async () => {
-    // First request — upstream returns a response
+  test("cache MISS populates cache; cache HIT returns cached body with X-Proxy-Cache: HIT", async () => {
+    const upstreamJson = JSON.stringify({ id: "ch_list" });
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
-      new Response(JSON.stringify({ id: "ch_list" }), {
+      new Response(upstreamJson, {
         status: 200,
         headers: { "content-type": "application/json" },
       }),
@@ -245,11 +257,22 @@ hosts:
     const r1 = req("/v1/charges", { headers: { "x-provider": "stripe" } });
     const res1 = await app.request(r1);
     expect(res1.headers.get("x-proxy-cache")).toBe("MISS");
+    const body1 = (await res1.json()) as { id: string };
+    expect(body1.id).toBe("ch_list");
+
+    // Verify cache entry has new shape
+    const [cacheEntry] = [...cacheStore.values()];
+    expect(cacheEntry).toBeDefined();
+    expect(typeof cacheEntry!.bodyBase64).toBe("string");
+    expect(cacheEntry!.contentType).toBe("application/json");
 
     // Second call — should be a HIT (no fetch needed)
     const r2 = req("/v1/charges", { headers: { "x-provider": "stripe" } });
     const res2 = await app.request(r2);
     expect(res2.headers.get("x-proxy-cache")).toBe("HIT");
+    expect(res2.headers.get("content-type")).toBe("application/json");
+    const body2 = (await res2.json()) as { id: string };
+    expect(body2.id).toBe("ch_list");
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(1);
   });
 
@@ -272,7 +295,6 @@ hosts:
   });
 
   test("token rejection (401) triggers auth.invalidate()", async () => {
-    // Build app with bearer_redis so we can observe invalidation via storage
     const storage = new InMemoryStorage();
     await storage.set("stripe:token", "old_tok");
 
@@ -306,7 +328,6 @@ hosts:
     const appDeps = await bap(depsInput);
     const app = buildApp(appDeps);
 
-    // Upstream returns 401 → should trigger invalidate
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
@@ -321,7 +342,170 @@ hosts:
       },
     });
     await app.request(r);
-    // After invalidation, token should be cleared
     expect(await storage.get("stripe:token")).toBeNull();
+  });
+
+  // ── PSK / X-Outpost-Auth tests ─────────────────────────────────────────────
+
+  test("missing X-Outpost-Auth on PSK-protected host returns 401 PROXY_AUTH_REQUIRED", async () => {
+    const hostsYaml = `
+hosts:
+  - id: secured
+    cidrs: ["127.0.0.1/32"]
+    can_call_sensitive: true
+    auth_token_env: OUTPOST_PSK
+`;
+    const app = await makeApp({
+      hostsYaml,
+      extraEnv: { OUTPOST_PSK: "correct-token" },
+    });
+    const r = req("/v1/charges/ch_123", {
+      headers: { "x-provider": "stripe" },
+      // No X-Outpost-Auth header
+    });
+    const res = await app.request(r);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("PROXY_AUTH_REQUIRED");
+    expect(res.headers.get("WWW-Authenticate")).toContain("X-Outpost-Auth");
+  });
+
+  test("wrong X-Outpost-Auth on PSK-protected host returns 401 PROXY_AUTH_REQUIRED", async () => {
+    const hostsYaml = `
+hosts:
+  - id: secured
+    cidrs: ["127.0.0.1/32"]
+    can_call_sensitive: true
+    auth_token_env: OUTPOST_PSK
+`;
+    const app = await makeApp({
+      hostsYaml,
+      extraEnv: { OUTPOST_PSK: "correct-token" },
+    });
+    const r = req("/v1/charges/ch_123", {
+      headers: {
+        "x-provider": "stripe",
+        "x-outpost-auth": "wrong-token",
+      },
+    });
+    const res = await app.request(r);
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("PROXY_AUTH_REQUIRED");
+  });
+
+  test("correct X-Outpost-Auth on PSK-protected host returns 200 and auth header not forwarded to upstream", async () => {
+    const hostsYaml = `
+hosts:
+  - id: secured
+    cidrs: ["127.0.0.1/32"]
+    can_call_sensitive: true
+    auth_token_env: OUTPOST_PSK
+`;
+    const app = await makeApp({
+      hostsYaml,
+      extraEnv: { OUTPOST_PSK: "correct-token" },
+    });
+
+    let capturedHeaders: Headers | undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(
+      async (input, init) => {
+        capturedHeaders = new Headers(init?.headers as HeadersInit);
+        return new Response(JSON.stringify({ id: "ch_123" }), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      },
+    );
+
+    const r = req("/v1/charges/ch_123", {
+      headers: {
+        "x-provider": "stripe",
+        "x-outpost-auth": "correct-token",
+      },
+    });
+    const res = await app.request(r);
+    expect(res.status).toBe(200);
+    // The PSK must NOT be forwarded to upstream
+    expect(capturedHeaders?.has("x-outpost-auth")).toBe(false);
+  });
+
+  test("host without auth_token_env requires no PSK (backward compat)", async () => {
+    // Default HOSTS_YAML has no auth_token_env — request should pass through.
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ id: "ch_123" }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const app = await makeApp();
+    const r = req("/v1/charges/ch_123", {
+      headers: { "x-provider": "stripe" },
+      // No X-Outpost-Auth — should not be required
+    });
+    const res = await app.request(r);
+    expect(res.status).toBe(200);
+  });
+
+  // ── Byte-transparent content-type forwarding tests ─────────────────────────
+
+  test("non-JSON upstream content-type is preserved end-to-end", async () => {
+    const csvBody = "id,amount\nch_1,100\nch_2,200\n";
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(csvBody, {
+        status: 200,
+        headers: { "content-type": "text/csv; charset=utf-8" },
+      }),
+    );
+    const app = await makeApp();
+    const r = req("/v1/charges/ch_123", {
+      headers: { "x-provider": "stripe" },
+    });
+    const res = await app.request(r);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("text/csv; charset=utf-8");
+    const text = await res.text();
+    expect(text).toBe(csvBody);
+  });
+
+  test("binary upstream response is forwarded byte-for-byte", async () => {
+    // Simulate a small binary payload (e.g. a PNG header sentinel).
+    const binaryBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a]);
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(binaryBytes, {
+        status: 200,
+        headers: { "content-type": "image/png" },
+      }),
+    );
+    const app = await makeApp();
+    const r = req("/v1/charges/ch_123", {
+      headers: { "x-provider": "stripe" },
+    });
+    const res = await app.request(r);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toBe("image/png");
+    const buf = await res.arrayBuffer();
+    expect(new Uint8Array(buf)).toEqual(binaryBytes);
+  });
+
+  test("content-encoding is stripped from response headers (fetch decompresses)", async () => {
+    // Simulate upstream that would normally advertise gzip encoding.
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: {
+          "content-type": "application/json",
+          "content-encoding": "gzip",
+        },
+      }),
+    );
+    const app = await makeApp();
+    const r = req("/v1/charges/ch_123", {
+      headers: { "x-provider": "stripe" },
+    });
+    const res = await app.request(r);
+    expect(res.status).toBe(200);
+    // content-encoding must be stripped — we forward decompressed bytes
+    expect(res.headers.get("content-encoding")).toBeNull();
   });
 });

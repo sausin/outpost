@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+import hmac
 import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 
 from app.python.auth.base import AuthContext
@@ -14,6 +14,7 @@ from app.python.core import cache as cache_mod
 from app.python.core.config import settings
 from app.python.core.errors import (
     CODE_AUTH_ERROR,
+    CODE_AUTH_REQUIRED,
     CODE_HOST_DENIED,
     CODE_NO_ROUTE,
     CODE_PATH_DENIED,
@@ -44,9 +45,12 @@ HOP_BY_HOP = {
     "x-real-ip",
     "x-broker",  # legacy routing header — strip before forwarding
     "x-provider",  # routing header — strip before forwarding
+    "x-outpost-auth",  # PSK — never leak to upstream
 }
 
 # Headers stripped from the upstream response before returning to the client.
+# Content-Encoding stays here because httpx auto-decompresses the body, so we
+# forward decompressed bytes and the encoding header must not claim otherwise.
 RESPONSE_HOP_BY_HOP = {"content-encoding", "transfer-encoding", "connection", "content-length"}
 
 
@@ -56,6 +60,24 @@ def _client_ip(request: Request) -> str:
         if xff:
             return xff.split(",")[0].strip()
     return request.client.host if request.client else "0.0.0.0"
+
+
+def _maybe_json(content_type: str, body: bytes) -> dict | None:
+    """Parse body as JSON only when content-type indicates JSON.
+
+    Used for auth-rejection inspection only — the raw bytes are still forwarded
+    to the agent verbatim regardless of parse outcome.
+    """
+    if not content_type or "application/json" not in content_type.lower():
+        return None
+    if not body:
+        return None
+    try:
+        import json
+
+        return json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return None
 
 
 @asynccontextmanager
@@ -160,6 +182,18 @@ async def proxy(path: str, request: Request) -> Response:
     if policy is None:
         return error_response(403, CODE_HOST_DENIED, f"Source IP {ip} not in host policy")
 
+    # 2a. PSK check — only when this host has one configured.
+    if policy.auth_token:
+        provided = request.headers.get("x-outpost-auth", "")
+        if not provided or not hmac.compare_digest(provided, policy.auth_token):
+            log.warning("PSK auth failed for host=%s ip=%s", policy.id, ip)
+            return error_response(
+                401,
+                CODE_AUTH_REQUIRED,
+                f"Authentication required for host '{policy.id}'",
+                headers={"WWW-Authenticate": 'X-Outpost-Auth realm="outpost"'},
+            )
+
     # 3. full_path already set; guard empty path.
     if full_path == "/":
         return error_response(404, CODE_NO_ROUTE, "Empty path")
@@ -206,9 +240,11 @@ async def proxy(path: str, request: Request) -> Response:
                 cached["status_code"],
                 route.category,
             )
-            return JSONResponse(
+            cached_bytes = cache_mod.decode_body(cached["body_b64"])
+            return Response(
+                content=cached_bytes,
                 status_code=cached["status_code"],
-                content=cached["body"],
+                media_type=cached["content_type"],
                 headers={"X-Proxy-Cache": "IDEMPOTENT-HIT", "X-Proxy-Provider": provider_name},
             )
 
@@ -226,9 +262,11 @@ async def proxy(path: str, request: Request) -> Response:
                 cached["status_code"],
                 route.category,
             )
-            return JSONResponse(
+            cached_bytes = cache_mod.decode_body(cached["body_b64"])
+            return Response(
+                content=cached_bytes,
                 status_code=cached["status_code"],
-                content=cached["body"],
+                media_type=cached["content_type"],
                 headers={"X-Proxy-Cache": "HIT", "X-Proxy-Provider": provider_name},
             )
         cache_state = "MISS"
@@ -305,10 +343,8 @@ async def proxy(path: str, request: Request) -> Response:
         except (ValueError, TypeError):
             retry_after = 1.0
         await app.state.limiter.note_upstream_429(provider_name, route.category, retry_after)
-        try:
-            upstream_body = upstream.json()
-        except ValueError:
-            upstream_body = {"raw": upstream.text}
+        upstream_ct = upstream.headers.get("content-type", "")
+        upstream_body = _maybe_json(upstream_ct, upstream.content) or {"raw": upstream.text[:1024]}
         log.info(
             "method=%s path=%s provider=%s status=429 category=%s cache=%s upstream=429",
             method,
@@ -325,33 +361,35 @@ async def proxy(path: str, request: Request) -> Response:
             headers={"Retry-After": str(max(1, int(retry_after)))},
         )
 
-    # 16. Parse body; check for auth rejection.
-    try:
-        body_json = upstream.json()
-    except ValueError:
-        body_json = {"raw": upstream.text}
+    # 16. Read upstream body as bytes (httpx auto-decompresses).
+    upstream_bytes = upstream.content
+    upstream_content_type = upstream.headers.get("content-type", "application/octet-stream")
 
-    if provider.auth.is_rejection(upstream.status_code, body_json):
+    # JSON-parse only for auth-rejection inspection, and only when content-type
+    # indicates JSON. Non-JSON responses still get the status-code rejection path.
+    body_for_auth_check = _maybe_json(upstream_content_type, upstream_bytes)
+    if provider.auth.is_rejection(upstream.status_code, body_for_auth_check):
         await provider.auth.invalidate()
 
-    # 17. Persist caches on success.
+    # 17. Persist caches on success — store raw bytes + content-type for true
+    # byte-equivalent replay on HIT.
     if 200 <= upstream.status_code < 300:
+        payload = {
+            "status_code": upstream.status_code,
+            "body_b64": cache_mod.encode_body(upstream_bytes),
+            "content_type": upstream_content_type,
+        }
         if ckey is not None:
-            await cache_mod.put_cached(
-                app.state.redis,
-                ckey,
-                {"status_code": upstream.status_code, "body": body_json},
-                route.cache_ttl,
-            )
+            await cache_mod.put_cached(app.state.redis, ckey, payload, route.cache_ttl)
         if method == "POST" and idem_header:
             await cache_mod.put_cached(
                 app.state.redis,
                 cache_mod.idem_key(provider_name, idem_header),
-                {"status_code": upstream.status_code, "body": body_json},
+                payload,
                 cache_mod.IDEM_TTL,
             )
 
-    # 18. Strip response headers.
+    # 18. Strip response headers, preserve content-type, add observability.
     strip = RESPONSE_HOP_BY_HOP | provider.strip_response_headers
     resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in strip}
     resp_headers["X-Proxy-Cache"] = cache_state
@@ -367,9 +405,10 @@ async def proxy(path: str, request: Request) -> Response:
         cache_state,
     )
 
-    # 19. Return response.
-    return JSONResponse(
+    # 19. Return raw bytes verbatim — no JSON coercion, no re-serialization.
+    return Response(
+        content=upstream_bytes,
         status_code=upstream.status_code,
-        content=body_json,
+        media_type=upstream_content_type,
         headers=resp_headers,
     )

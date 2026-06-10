@@ -10,7 +10,8 @@ export interface Storage {
 
 export interface CacheEntry {
   statusCode: number;
-  body: unknown;
+  bodyBase64: string;
+  contentType: string;
 }
 
 export interface CacheBackend {

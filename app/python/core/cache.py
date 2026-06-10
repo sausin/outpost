@@ -3,12 +3,15 @@
 Cache key: `cache:{broker}:{method}:{path}:{sorted_query_hash}`.
 Idempotency key: `idem:{broker}:{idempotency_key}`. Stored for 24h.
 
-Payloads are JSON-encoded; Redis handles them fine for the small response
-sizes broker APIs return.
+Cached entry shape: {status_code: int, body_b64: str, content_type: str}.
+Bodies are base64-encoded so we stay byte-faithful for non-JSON responses
+(binary, CSV, plain text). For JSON-heavy workloads this costs ~33% size
+overhead but lets the proxy be truly transparent rather than JSON-only.
 """
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 
@@ -31,6 +34,16 @@ def cache_key(broker: str, method: str, path: str, query_string: str) -> str:
 
 def idem_key(broker: str, key: str) -> str:
     return f"idem:{broker}:{key}"
+
+
+def encode_body(raw: bytes) -> str:
+    """Base64-encode a response body for storage."""
+    return base64.b64encode(raw).decode("ascii")
+
+
+def decode_body(b64: str) -> bytes:
+    """Decode a base64-stored response body back to bytes."""
+    return base64.b64decode(b64.encode("ascii"))
 
 
 async def get_cached(redis: Redis, key: str) -> dict | None:

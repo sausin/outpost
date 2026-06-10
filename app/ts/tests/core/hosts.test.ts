@@ -1,5 +1,17 @@
 import { describe, test, expect, vi } from "vitest";
 import { HostResolver, loadHostsFromYaml } from "../../src/core/hosts.ts";
+import type { AppEnv } from "../../src/core/env.ts";
+
+function fakeEnv(extra: Record<string, string> = {}): AppEnv {
+  return {
+    DEFAULT_PROVIDER: "",
+    PROVIDERS_DIR: "",
+    HOSTS_CONFIG_PATH: "",
+    PROXY_PORT: "",
+    LOG_LEVEL: "",
+    ...extra,
+  };
+}
 
 describe("HostResolver — basic resolution", () => {
   test("IPv4 address matches an encompassing /24 CIDR", () => {
@@ -97,7 +109,7 @@ hosts:
     cidrs: ["172.20.0.0/16"]
     can_trade: true
 `;
-    const r = loadHostsFromYaml(yaml);
+    const r = loadHostsFromYaml(yaml, fakeEnv());
     expect(r.resolve("172.20.0.5")?.canCallSensitive).toBe(true);
     expect(consoleWarn).toHaveBeenCalledWith(
       expect.stringContaining("deprecated"),
@@ -112,7 +124,89 @@ hosts:
     cidrs: ["10.5.0.0/24"]
     can_call_sensitive: true
 `;
-    const r = loadHostsFromYaml(yaml);
+    const r = loadHostsFromYaml(yaml, fakeEnv());
     expect(r.resolve("10.5.0.1")?.canCallSensitive).toBe(true);
+  });
+
+  // ── PSK / auth_token_env tests ─────────────────────────────────────────────
+
+  test("auth_token_env is resolved from env at load time", () => {
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const yaml = `
+hosts:
+  - id: secured
+    cidrs: ["10.0.0.0/8"]
+    can_call_sensitive: false
+    auth_token_env: MY_PSK
+`;
+    const r = loadHostsFromYaml(yaml, fakeEnv({ MY_PSK: "supersecret" }));
+    expect(r.resolve("10.0.0.1")?.authToken).toBe("supersecret");
+    expect(consoleInfo).toHaveBeenCalledWith(
+      expect.stringContaining("secured"),
+    );
+    consoleInfo.mockRestore();
+  });
+
+  test("fail-fast when auth_token_env is set but env var is missing", () => {
+    const yaml = `
+hosts:
+  - id: secured
+    cidrs: ["10.0.0.0/8"]
+    can_call_sensitive: false
+    auth_token_env: MISSING_VAR
+`;
+    expect(() => loadHostsFromYaml(yaml, fakeEnv())).toThrow(
+      /MISSING_VAR.*unset or empty/,
+    );
+  });
+
+  test("fail-fast when auth_token_env resolves to empty string", () => {
+    const yaml = `
+hosts:
+  - id: secured
+    cidrs: ["10.0.0.0/8"]
+    can_call_sensitive: false
+    auth_token_env: EMPTY_VAR
+`;
+    expect(() => loadHostsFromYaml(yaml, fakeEnv({ EMPTY_VAR: "" }))).toThrow(
+      /EMPTY_VAR.*unset or empty/,
+    );
+  });
+
+  test("host without auth_token_env has no authToken on its policy", () => {
+    const yaml = `
+hosts:
+  - id: open
+    cidrs: ["10.0.0.0/8"]
+    can_call_sensitive: false
+`;
+    const r = loadHostsFromYaml(yaml, fakeEnv());
+    expect(r.resolve("10.0.0.1")?.authToken).toBeUndefined();
+  });
+
+  test("multiple hosts can have different auth tokens", () => {
+    const consoleInfo = vi.spyOn(console, "info").mockImplementation(() => {});
+    const yaml = `
+hosts:
+  - id: host-a
+    cidrs: ["10.1.0.0/24"]
+    can_call_sensitive: false
+    auth_token_env: PSK_A
+  - id: host-b
+    cidrs: ["10.2.0.0/24"]
+    can_call_sensitive: false
+    auth_token_env: PSK_B
+  - id: host-c
+    cidrs: ["10.3.0.0/24"]
+    can_call_sensitive: false
+`;
+    const r = loadHostsFromYaml(
+      yaml,
+      fakeEnv({ PSK_A: "token-alpha", PSK_B: "token-beta" }),
+    );
+    expect(r.resolve("10.1.0.5")?.authToken).toBe("token-alpha");
+    expect(r.resolve("10.2.0.5")?.authToken).toBe("token-beta");
+    expect(r.resolve("10.3.0.5")?.authToken).toBeUndefined();
+    consoleInfo.mockRestore();
   });
 });

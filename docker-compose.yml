@@ -39,9 +39,17 @@ services:
       # EXTRA_PROVIDERS_DIR: /custom-providers
     ports: ["8080:8080"]
     volumes:
-      - ./hosts.yaml:/app/hosts.yaml:ro
-      # Uncomment to drop custom provider YAMLs without rebuilding the image:
-      # - ./my-providers:/custom-providers:ro
+      # Both config locations are mounted read-only from the host repo. Edit
+      # them on disk and `docker compose restart proxy` — no image rebuild.
+      # The image bakes the same files in as defaults, so a `docker run`
+      # without these mounts still works.
+      - ./hosts.yaml:/etc/outpost/hosts.yaml:ro
+      - ./app/builtin_providers:/etc/outpost/providers:ro
+      # Optional: drop additional custom provider YAMLs (loaded on top of the
+      # built-ins; same `name` overrides). Useful for one-off providers you
+      # don't want to PR upstream.
+      # - ./my-providers:/etc/outpost/extra-providers:ro
+      # And set in .env: EXTRA_PROVIDERS_DIR=/etc/outpost/extra-providers
 
 volumes:
   outpost_redis_data:

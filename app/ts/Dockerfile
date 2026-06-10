@@ -47,11 +47,15 @@ COPY --from=builder --chown=outpost:outpost /build/dist ./dist
 COPY --from=builder --chown=outpost:outpost /build/node_modules ./node_modules
 COPY --from=builder --chown=outpost:outpost /build/package.json ./package.json
 
-# Vendored YAML provider definitions — shared with the Python image.
-COPY --chown=outpost:outpost app/builtin_providers ./builtin_providers
+# Vendored config — baked in as defaults so `docker run` works without volume
+# mounts. Compose deployments shadow these with host-side mounts at the same
+# paths, letting operators edit YAMLs and restart without an image rebuild.
+COPY --chown=outpost:outpost app/builtin_providers /etc/outpost/providers
+COPY --chown=outpost:outpost hosts.yaml /etc/outpost/hosts.yaml
 
 ENV NODE_ENV=production \
-    PROVIDERS_DIR=/app/builtin_providers
+    PROVIDERS_DIR=/etc/outpost/providers \
+    HOSTS_CONFIG_PATH=/etc/outpost/hosts.yaml
 
 USER outpost
 EXPOSE 8080

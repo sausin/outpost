@@ -54,7 +54,7 @@ export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
     }
   }
 
-  const hosts = loadHostsFromYaml(input.hostsYaml);
+  const hosts = loadHostsFromYaml(input.hostsYaml, input.env);
 
   return {
     providers: built,

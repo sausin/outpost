@@ -54,13 +54,17 @@ ENV PATH="/opt/venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
-# Application code + the vendored built-in provider YAMLs.
+# Application code.
 COPY --chown=app:app app ./app
-COPY --chown=app:app hosts.yaml .
 
-# Built-in YAMLs live at /app/app/builtin_providers; pin the path explicitly
-# so the default (./builtin_providers, relative to WORKDIR) resolves correctly.
-ENV PROVIDERS_DIR=/app/app/builtin_providers
+# Vendored config — baked in as defaults so `docker run` works without volume
+# mounts. Compose deployments shadow these with host-side mounts at the same
+# paths, letting operators edit YAMLs and restart without an image rebuild.
+COPY --chown=app:app app/builtin_providers /etc/outpost/providers
+COPY --chown=app:app hosts.yaml /etc/outpost/hosts.yaml
+
+ENV PROVIDERS_DIR=/etc/outpost/providers \
+    HOSTS_CONFIG_PATH=/etc/outpost/hosts.yaml
 
 USER app
 EXPOSE 8080

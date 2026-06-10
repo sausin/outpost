@@ -35,15 +35,46 @@ const REQUEST_HOP_BY_HOP = new Set([
   "x-real-ip",
   "x-broker",
   "x-provider",
+  // Strip the PSK so it never leaks to upstream.
+  "x-outpost-auth",
 ]);
 
 // ─── hop-by-hop headers stripped from the upstream response ───────────────────
+// content-encoding is intentionally included: fetch decompresses transparently
+// so we forward the raw decompressed bytes — advertising gzip/br encoding would
+// be wrong.
 const RESPONSE_HOP_BY_HOP = new Set([
   "content-encoding",
   "transfer-encoding",
   "connection",
   "content-length",
 ]);
+
+// ─── Constant-time string compare — prevents timing attacks on PSK checks ─────
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i++) {
+    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return diff === 0;
+}
+
+// ─── Base64 helpers for byte-transparent cache serialisation ──────────────────
+function bytesToBase64(bytes: Uint8Array): string {
+  // Workers + Node 22 both have btoa() that accepts a binary string.
+  let binary = "";
+  for (let i = 0; i < bytes.length; i++)
+    binary += String.fromCharCode(bytes[i]);
+  return btoa(binary);
+}
+
+function base64ToBytes(b64: string): Uint8Array {
+  const binary = atob(b64);
+  const out = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) out[i] = binary.charCodeAt(i);
+  return out;
+}
 
 export interface AppDeps {
   providers: Map<string, GenericProvider>;
@@ -132,6 +163,26 @@ export function buildApp(deps: AppDeps): Hono {
       );
     }
 
+    // ── 3a. Per-host PSK auth ─────────────────────────────────────────────────
+    if (policy.authToken) {
+      const provided = req.headers.get("x-outpost-auth") ?? "";
+      if (
+        provided.length === 0 ||
+        !constantTimeEqual(provided, policy.authToken)
+      ) {
+        console.warn(
+          `[proxy] PSK auth failed for host '${policy.id}' from ${ip}`,
+        );
+        return errorResponse(
+          401,
+          CODES.AUTH_REQUIRED,
+          `Authentication required for host '${policy.id}'`,
+          null,
+          { "WWW-Authenticate": 'X-Outpost-Auth realm="outpost"' },
+        );
+      }
+    }
+
     // ── 4. Guard empty path ──────────────────────────────────────────────────
     if (!fullPath || fullPath === "/") {
       return errorResponse(404, CODES.NO_ROUTE, "Empty path");
@@ -179,10 +230,11 @@ export function buildApp(deps: AppDeps): Hono {
         console.info(
           `[proxy] method=${method} path=${fullPath} provider=${providerName} status=${cached.statusCode} category=${route.category} cache=IDEMPOTENT-HIT`,
         );
-        return new Response(JSON.stringify(cached.body), {
+        const cachedBytes = base64ToBytes(cached.bodyBase64);
+        return new Response(cachedBytes, {
           status: cached.statusCode,
           headers: {
-            "content-type": "application/json",
+            "content-type": cached.contentType,
             "x-proxy-cache": "IDEMPOTENT-HIT",
             "x-proxy-provider": providerName,
           },
@@ -204,10 +256,11 @@ export function buildApp(deps: AppDeps): Hono {
         console.info(
           `[proxy] method=${method} path=${fullPath} provider=${providerName} status=${cached.statusCode} category=${route.category} cache=HIT`,
         );
-        return new Response(JSON.stringify(cached.body), {
+        const cachedBytes = base64ToBytes(cached.bodyBase64);
+        return new Response(cachedBytes, {
           status: cached.statusCode,
           headers: {
-            "content-type": "application/json",
+            "content-type": cached.contentType,
             "x-proxy-cache": "HIT",
             "x-proxy-provider": providerName,
           },
@@ -336,11 +389,19 @@ export function buildApp(deps: AppDeps): Hono {
         retryAfter,
       );
 
-      let upstreamBody: unknown;
-      try {
-        upstreamBody = await upstream.json();
-      } catch {
-        upstreamBody = { raw: await upstream.text() };
+      // JSON-parse the 429 body only when content-type says it's JSON.
+      // Non-JSON 429s get null metadata — status code rejection still works.
+      let upstreamBody: unknown = null;
+      const ct429 = upstream.headers.get("content-type") ?? "";
+      if (ct429.toLowerCase().includes("application/json")) {
+        try {
+          upstreamBody = await upstream.json();
+        } catch {
+          upstreamBody = null;
+        }
+      } else {
+        // Drain the body to avoid resource leaks.
+        await upstream.text().catch(() => {});
       }
 
       console.info(
@@ -356,41 +417,57 @@ export function buildApp(deps: AppDeps): Hono {
       );
     }
 
-    // ── 15. Parse body; check for auth rejection ──────────────────────────────
-    let bodyJson: unknown;
-    try {
-      bodyJson = await upstream.json();
-    } catch {
-      bodyJson = { raw: await upstream.text() };
+    // ── 15. Read raw bytes once — fetch decompresses transparently ────────────
+    // These are the post-decompression bytes we'll forward verbatim.
+    const upstreamBytes = new Uint8Array(await upstream.arrayBuffer());
+    const upstreamContentType =
+      upstream.headers.get("content-type") ?? "application/octet-stream";
+
+    // ── 16. Auth-rejection check ──────────────────────────────────────────────
+    // JSON-parse ONLY for the auth-rejection body inspection and only when the
+    // content-type says it's JSON. Non-JSON responses still go through the
+    // status-code rejection path inside isRejection().
+    let bodyForAuthCheck: unknown = null;
+    if (upstreamContentType.toLowerCase().includes("application/json")) {
+      try {
+        const text = new TextDecoder().decode(upstreamBytes);
+        bodyForAuthCheck = text.length > 0 ? JSON.parse(text) : null;
+      } catch {
+        bodyForAuthCheck = null;
+      }
     }
 
-    if (provider.auth.isRejection(upstream.status, bodyJson)) {
+    if (provider.auth.isRejection(upstream.status, bodyForAuthCheck)) {
       await provider.auth.invalidate();
     }
 
-    // ── 16. Persist response cache + idempotency on 2xx ──────────────────────
+    // ── 17. Persist response cache + idempotency on 2xx ──────────────────────
     if (upstream.status >= 200 && upstream.status < 300) {
+      const entry = {
+        statusCode: upstream.status,
+        bodyBase64: bytesToBase64(upstreamBytes),
+        contentType: upstreamContentType,
+      };
+
       if (ckey !== null) {
-        await cache.put(
-          ckey,
-          { statusCode: upstream.status, body: bodyJson },
-          route.cacheTtl,
-        );
+        await cache.put(ckey, entry, route.cacheTtl);
       }
 
       if (method === "POST" && idemHeader) {
         await cache.put(
           idemKey(providerName, idemHeader),
-          { statusCode: upstream.status, body: bodyJson },
+          entry,
           IDEM_TTL_SECONDS,
         );
       }
     }
 
-    // ── 17. Strip response headers, add proxy metadata, return ───────────────
+    // ── 18. Strip response headers, add proxy metadata, return ───────────────
     const respHeaders = new Headers();
     for (const [k, v] of upstream.headers.entries()) {
       const kl = k.toLowerCase();
+      // RESPONSE_HOP_BY_HOP already excludes content-encoding (we forward decompressed
+      // bytes). Content-Type, Cache-Control, Retry-After, etc. pass through verbatim.
       if (
         !RESPONSE_HOP_BY_HOP.has(kl) &&
         !provider.stripResponseHeaders.has(kl)
@@ -398,7 +475,6 @@ export function buildApp(deps: AppDeps): Hono {
         respHeaders.set(k, v);
       }
     }
-    respHeaders.set("content-type", "application/json");
     respHeaders.set("x-proxy-cache", cacheState);
     respHeaders.set("x-proxy-provider", providerName);
 
@@ -406,7 +482,7 @@ export function buildApp(deps: AppDeps): Hono {
       `[proxy] method=${method} path=${fullPath} provider=${providerName} status=${upstream.status} category=${route.category} cache=${cacheState}`,
     );
 
-    return new Response(JSON.stringify(bodyJson), {
+    return new Response(upstreamBytes, {
       status: upstream.status,
       headers: respHeaders,
     });

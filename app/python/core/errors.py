@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 # ---------------------------------------------------------------------------
 CODE_UNKNOWN_PROVIDER = "PROXY_UNKNOWN_PROVIDER"
 CODE_HOST_DENIED = "PROXY_HOST_DENIED"
+CODE_AUTH_REQUIRED = "PROXY_AUTH_REQUIRED"  # missing or wrong X-Outpost-Auth PSK
 CODE_NO_ROUTE = "PROXY_NO_ROUTE"  # path not in allowlist
 CODE_PATH_DENIED = "PROXY_PATH_DENIED"  # path matches deny rule
 CODE_SENSITIVE_DENIED = (

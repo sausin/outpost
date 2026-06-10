@@ -5,11 +5,14 @@
 
 import * as ipaddr from "ipaddr.js";
 import yaml from "js-yaml";
+import type { AppEnv } from "./env.ts";
 
 export interface HostPolicy {
   id: string;
   canCallSensitive: boolean;
   description?: string;
+  /** Resolved PSK value (from the env var named in YAML), or undefined if no auth required. */
+  authToken?: string;
 }
 
 interface CidrEntry {
@@ -77,13 +80,14 @@ interface RawHost {
   can_call_sensitive?: boolean;
   can_trade?: boolean;
   description?: string;
+  auth_token_env?: string;
 }
 
 interface RawHostsYaml {
   hosts?: RawHost[];
 }
 
-export function loadHostsFromYaml(yamlText: string): HostResolver {
+export function loadHostsFromYaml(yamlText: string, env: AppEnv): HostResolver {
   const data = yaml.load(yamlText) as RawHostsYaml;
   const entries: Array<{ cidr: string; policy: HostPolicy }> = [];
 
@@ -102,10 +106,27 @@ export function loadHostsFromYaml(yamlText: string): HostResolver {
       canSensitive = false;
     }
 
+    // Resolve PSK from env var at load time so missing vars fail fast at startup.
+    const tokenEnv = host.auth_token_env;
+    let authToken: string | undefined = undefined;
+    if (tokenEnv) {
+      const resolved = env[tokenEnv];
+      if (typeof resolved !== "string" || resolved.length === 0) {
+        throw new Error(
+          `hosts.yaml: host '${host.id}' requires PSK via env var '${tokenEnv}' but it is unset or empty.`,
+        );
+      }
+      authToken = resolved;
+      console.info(
+        `hosts.yaml: host '${host.id}' configured with PSK from ${tokenEnv}`,
+      );
+    }
+
     const policy: HostPolicy = {
       id: host.id,
       canCallSensitive: canSensitive,
       description: host.description,
+      authToken,
     };
 
     for (const cidr of host.cidrs ?? []) {

@@ -1,28 +1,41 @@
 # Host policy. Lookup is by source IP, longest-prefix CIDR match.
-# `can_call_sensitive: true` is required for any endpoint marked `sensitive: true`
-# in its provider YAML. Read-only endpoints are allowed for everyone matched here.
-# Unmatched IPs get 403.
 #
-# Backward compatibility: `can_trade` is still read as an alias for can_call_sensitive
-# but will log a deprecation warning. Migrate to can_call_sensitive.
+# Three knobs per host:
+#   cidrs              — CIDR block(s) this entry applies to
+#   can_call_sensitive — must be true to invoke endpoints flagged sensitive
+#                        (writes, trades, deletes) in the provider YAML
+#   auth_token_env     — OPTIONAL. When set, requests from this host must
+#                        carry `X-Outpost-Auth: <token>` matching the env
+#                        var's value. Use it for any internet-facing host
+#                        where IP allowlisting alone isn't sufficient.
+#
+# Unmatched IPs get 403 PROXY_HOST_DENIED.
+# Hosts with PSK + missing/wrong token get 401 PROXY_AUTH_REQUIRED.
+# Hosts without `auth_token_env` skip the PSK check (handy for localhost-dev).
+#
+# Backward compatibility: `can_trade` is still read as an alias for
+# can_call_sensitive but logs a deprecation warning.
 
 hosts:
   - id: research-agent
     cidrs: ["10.0.1.0/24"]
     can_call_sensitive: false
-    description: "Read-only research / analytics agents"
+    auth_token_env: RESEARCH_AGENT_TOKEN
+    description: "Read-only research / analytics agents (PSK required)"
 
   - id: backtest-runner
     cidrs: ["10.0.2.5/32", "10.0.2.6/32"]
     can_call_sensitive: false
-    description: "Backtesting workers — read historical + live data only"
+    auth_token_env: BACKTEST_RUNNER_TOKEN
+    description: "Backtesting workers — read historical + live data only (PSK required)"
 
   - id: execution-agent
     cidrs: ["10.0.3.10/32"]
     can_call_sensitive: true
-    description: "Sole host permitted to invoke sensitive (write/trade) endpoints"
+    auth_token_env: EXECUTION_AGENT_TOKEN
+    description: "Sole host permitted to invoke sensitive endpoints (PSK required)"
 
   - id: localhost-dev
     cidrs: ["127.0.0.1/32", "::1/128"]
     can_call_sensitive: true
-    description: "Local development"
+    description: "Local development — no PSK required (omit auth_token_env)"

@@ -102,6 +102,22 @@ make restore BACKUP=./backups/outpost-<ts>.tar.gz
 
 > **Manual install or hacking on the code?** See [`docs/MANUAL.md`](docs/MANUAL.md).
 
+### Editing config without rebuilding
+
+Both `hosts.yaml` and `app/builtin_providers/*.yaml` are **mounted from your
+host at `/etc/outpost/hosts.yaml` and `/etc/outpost/providers/`**. Edit a
+provider's `enabled:` flag, switch a Groww auth flow, tweak an allowlist,
+add a new PSK to a host entry — all without an image rebuild:
+
+```bash
+$EDITOR app/builtin_providers/groww.yaml   # uncomment the flow you want
+$EDITOR hosts.yaml                          # add auth_token_env to a host
+docker compose restart proxy                # picks up the changes
+```
+
+The image bakes the same files in as fallbacks, so a raw `docker run`
+without these mounts still boots with sensible defaults.
+
 ## Pull an image directly
 
 ```bash
@@ -182,11 +198,22 @@ The Workers tier is free up to 100k requests/day, $5/mo above that.
 | Control | Where it lives |
 |---|---|
 | **Source-IP allowlist** | `hosts.yaml` — CIDR-mapped host policies; unknown IPs get 403 |
+| **Per-host pre-shared key** | `auth_token_env: NAME` in `hosts.yaml`; agents send `X-Outpost-Auth: <token>`; mismatch → 401. Constant-time compare; opt-in per host (omit the field for trusted networks like localhost) |
 | **`sensitive: true` gate** | Only hosts with `can_call_sensitive: true` may call sensitive endpoints |
 | **Path deny list** | `forwarding.deny: [...]` — checked before allow rules |
-| **Auth secrets** | Env / Redis, never seen by the agent |
+| **Auth secrets** | Env / Redis / Workers KV — never seen by the agent |
 | **Cooldown on upstream 429** | Redis-tracked across all workers — no thundering-herd retries |
-| **Container hardening** | Runs as UID 10001 (non-root), pinned outside SYS_UID range; runs `tini` as PID 1; ~32 MB image, no compilers in the runtime layer |
+| **Byte-transparent forwarding** | Upstream `Content-Type` and raw response bytes preserved end-to-end; the proxy isn't JSON-coerced. Binary, CSV, SSE-style responses pass through verbatim |
+| **`X-Outpost-Auth` stripped before forwarding** | The PSK never leaks to the upstream API |
+| **Container hardening** | Runs as UID 10001 (non-root), pinned outside SYS_UID range; runs `tini` as PID 1; ~32 MB Python / ~45 MB TS image, no compilers in the runtime layer |
+
+### Defense-in-depth recipe for internet-facing deploys
+
+1. **TLS at the edge** — `make install` with the Public mode picks up Caddy + Let's Encrypt automatically.
+2. **Tighten `TRUSTED_PROXIES`** to your Caddy/load-balancer CIDR so `X-Forwarded-For` is only honored from it.
+3. **Set `auth_token_env`** on every host except `localhost-dev`. Generate tokens with `openssl rand -hex 32`. Rotate by changing one env var.
+4. **`can_call_sensitive: true`** only for hosts that genuinely place writes/trades; everyone else stays read-only.
+5. **Allowlist mode** in production provider YAMLs — transparent mode is for dev/experiments.
 
 ## Real-world examples
 
