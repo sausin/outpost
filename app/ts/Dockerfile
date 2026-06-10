@@ -26,10 +26,21 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY app/ts/tsconfig.json ./
 COPY app/ts/src ./src
 
-# tsup 8.x: --format esm emits .mjs by default. --no-splitting keeps everything
-# in a single file. We don't generate .d.ts (runtime image doesn't need them).
-# --loader .yaml=text is for workers.ts which imports YAMLs as bundled text;
-# Node's adapter ignores them at runtime but tsup walks the project graph.
+# workers.ts imports YAMLs via "../../builtin_providers/*.yaml" and
+# "../../hosts.yaml" (relative to src/adapter/). Locally those paths
+# resolve through symlinks in app/ts/; inside the build context they
+# don't exist unless we drop the real files at /build/.  tsup walks the
+# whole project graph (not just node.ts's import closure), so esbuild
+# must be able to RESOLVE these files even though the Node bundle then
+# tree-shakes them out — verified locally: zero YAML strings end up in
+# dist/node.js.
+COPY app/builtin_providers ./builtin_providers
+COPY hosts.yaml ./hosts.yaml
+
+# tsup 8.x: --format esm emits .js when package.json has type=module.
+# --no-splitting keeps everything in one file; we don't generate .d.ts.
+# --loader .yaml=text teaches esbuild how to handle workers.ts's YAML
+# imports (text-bundling, mirrors wrangler's behavior).
 RUN npx tsup src/adapter/node.ts \
       --format esm \
       --outDir dist \
