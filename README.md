@@ -2,11 +2,14 @@
 
 > Give AI agents access to GitHub, Slack, Stripe, Jira, and any API — without ever exposing the underlying credentials.
 
-Outpost is a capability layer for AI agents.
+```
+                Traditional:    Agent + Credential
+                Outpost:        Agent + Capability
+```
 
-Your agents can use secrets.
+**Agents should receive capabilities, not credentials.**
 
-They never possess secrets.
+Outpost is a capability layer for AI agents. Your agents can use secrets. They never possess secrets.
 
 Deploy globally in minutes using Cloudflare Workers — or self-host on any VPS with Docker.
 
@@ -118,6 +121,20 @@ The traditional secret management model breaks down when autonomous systems are 
 
 ---
 
+## Why Now?
+
+```
+2023:    AI assistants wrote code.
+2024:    AI agents started using tools.
+2025:    AI agents started operating production systems.
+```
+
+The agent's blast radius grew by orders of magnitude. The security model never changed.
+
+Outpost exists because agents are no longer passive assistants.
+
+---
+
 ## Quick Start
 
 ### Cloudflare Workers (free tier, zero servers)
@@ -126,22 +143,17 @@ The traditional secret management model breaks down when autonomous systems are 
 git clone https://github.com/sausin/outpost.git
 cd outpost/app/ts
 npm install
-wrangler kv namespace create TOKENS
-wrangler kv namespace create RATE_LIMIT
-wrangler kv namespace create CACHE
-# Paste the returned IDs into wrangler.toml, then:
-wrangler secret put STRIPE_SECRET_KEY    # repeat for each provider's credentials
-wrangler deploy
+npx wrangler deploy
 ```
 
-Free up to 100k requests/day. $5/mo above that.
-
-Local dev (no Cloudflare account needed):
+For local testing without a Cloudflare account:
 
 ```bash
 cp .dev.vars.example .dev.vars   # fill in test credentials
 npx wrangler dev                  # http://localhost:8788
 ```
+
+Free up to 100k requests/day. Most agent workloads fit under that.
 
 ### Docker / self-host (Python runtime, full features)
 
@@ -178,11 +190,58 @@ Both multi-arch (`linux/amd64`, `linux/arm64`).
 
 > Manual install or hacking on the code? See [`docs/MANUAL.md`](docs/MANUAL.md).
 
+### Advanced: Cloudflare KV namespace setup
+
+For production Workers deploys you'll want persistent KV namespaces for tokens, rate-limit state, and response cache. Create them once:
+
+```bash
+cd app/ts
+wrangler kv namespace create TOKENS
+wrangler kv namespace create RATE_LIMIT
+wrangler kv namespace create CACHE
+# Paste the returned IDs into wrangler.toml
+wrangler secret put STRIPE_SECRET_KEY    # repeat for each provider's credentials
+wrangler deploy
+```
+
+Without this, the first `wrangler deploy` uses miniflare-style transient KV — fine for testing, not safe for production (no persistence across cold starts).
+
+---
+
+## Works With
+
+Any HTTP client can talk to Outpost. Tested integrations include:
+
+- **Claude Code** — point at `OUTPOST_BASE_URL` instead of the upstream
+- **OpenAI Codex CLI / Codex Agents** — wrap fetch/axios with the proxy URL
+- **Cursor / Continue / Aider** — same drop-in pattern
+- **OpenHands** — set the LLM and tool base URLs to Outpost
+- **MCP servers** — front any MCP tool's HTTP client with Outpost for credential isolation
+- **Custom agents** — anything that speaks HTTP works; no SDK required
+
+The integration shape is always the same: replace `https://api.<vendor>.com` with `http://outpost:8080` plus an `X-Provider: <name>` header. No agent-side library to install, no SDK to upgrade.
+
 ---
 
 ## 3-Line Provider YAMLs
 
 Drop a YAML in `app/builtin_providers/`, restart, and the provider is live. The agent calls `http://localhost:8080/<path>` with `X-Provider: <name>` — Outpost injects the auth and forwards.
+
+### Zero-configuration mode
+
+The minimum YAML is **literally 3 lines** — `name`, `base_url`, `auth`. **No path list. No endpoint catalog. No allowlist.** Whatever path the agent calls is forwarded verbatim to the upstream:
+
+```
+agent: GET  /repos/octocat/hello-world
+       │  (X-Provider: github)
+       ▼
+outpost forwards to → https://api.github.com/repos/octocat/hello-world
+                       (with Authorization: Bearer $GITHUB_TOKEN injected)
+```
+
+This is the default ("transparent") forwarding mode. The agent's existing knowledge of the upstream's URL structure carries over verbatim — you don't enumerate endpoints up front. Outpost still gives you the auth injection, the rate-limit shaping, the source-IP allowlist, and the sensitive-write gate; you just don't pre-declare every path the agent might hit.
+
+When you want tighter control later — pinning specific paths, per-endpoint cache TTLs, per-category rate buckets — add a `forwarding.allow` block and switch to `mode: allowlist`. The `groww.yaml` and `upstox.yaml` we ship are full examples of that hardened mode.
 
 These are copy-paste starting points. Stripe and OpenAI ship with the repo (`enabled: false`); GitHub, Slack, and Jira are examples you create yourself — each is literally 3 lines.
 
@@ -308,6 +367,44 @@ Both runtimes implement the same protocol and consume identical YAMLs:
 | **Image size** | 32 MB | 45 MB |
 | **Test coverage** | mature | 121 vitest tests, 100% pass |
 | **Pick this if** | self-host on a VPS; need exotic auth plugins | want Cloudflare Workers free-tier deploy; want one language across runtime + tooling |
+
+---
+
+## Limitations
+
+A few things Outpost is **not** good at — be honest with yourself about whether they apply before you pick a deploy target.
+
+### 1. Static-IP-locked upstreams don't work on Cloudflare Workers
+
+Many regulated APIs (Indian brokers Groww and Upstox, several banking/payments APIs, some fintech sandboxes) require you to whitelist a **fixed source IP** on their developer dashboard. Tokens minted from a non-whitelisted IP get rejected.
+
+Cloudflare Workers deploys come from CF's dynamic edge pool — you don't get a stable egress IP on the free tier. So:
+
+| Upstream auth model | Works on Workers? | Works on Docker (VPS)? |
+|---|---|---|
+| Stateless API key (Stripe, OpenAI, Anthropic, GitHub, Slack, Twilio) | yes | yes |
+| OAuth refresh, HMAC signing (Binance, Coinbase, Notion) | yes | yes |
+| **Static-IP-whitelisted** (Groww, Upstox, some Plaid setups) | **no** | yes (whitelist your VPS IP) |
+
+For the static-IP case, deploy the **Python or TS Docker image on a VPS with a stable IP**, whitelist that IP in the upstream's developer console, and route those providers through it. Other providers can still ride a Workers deploy. The same proxy config (the YAML) works on both — only the deploy target changes.
+
+(Cloudflare's enterprise plans offer dedicated egress IPs for Workers, but that's a paid add-on outside this project's scope.)
+
+### 2. WebSocket streams are not proxied
+
+Outpost is HTTP-only. Upstox's market-data WebSocket and Groww's streaming feeds need a separate connection from the agent. We may add WS forwarding later — see the roadmap.
+
+### 3. Workers cold start is sub-millisecond but rate-limit semantics are weaker
+
+The Workers runtime uses KV-with-optimistic-refill for rate buckets (free tier). Under genuine contention this can over-permit by a few requests per window. If you need atomic multi-window precision on the Workers path, Cloudflare Paid + Durable Objects gets you there (roadmap item). For now, Docker + Redis is the correct choice for hard rate-limit guarantees.
+
+### 4. Plugin escape hatch is bundle-time on the TS runtime
+
+Workers + bundled Node can't dynamic-import code at runtime. The TS runtime ships a static `PLUGIN_REGISTRY` listing every plugin the bundle knows about — adding a new plugin means editing that file and rebuilding/redeploying. Python's plugin model is fully dynamic (any importable class). Pick Python if you expect to add exotic auth plugins frequently.
+
+### 5. No built-in approval workflows yet
+
+`sensitive: true` gates which hosts can call which endpoints, but it's pre-approved by IP/PSK. There's no out-of-band "ask a human to approve this trade" flow yet. On the roadmap.
 
 ---
 
@@ -503,20 +600,25 @@ See [`docs/MANUAL.md`](docs/MANUAL.md) for the local dev workflow.
 
 ## Roadmap
 
-- [x] Multi-broker proxy with X-Provider routing
-- [x] 10 declarative auth modules + plugin escape hatch
-- [x] Transparent vs allowlist forwarding modes
-- [x] Multi-window rate limits with upstream-429 cooldown
-- [x] ONCE-style install + lifecycle Make targets
-- [x] Multi-arch GHCR images (Python + TypeScript)
-- [x] Cloudflare Workers TypeScript runtime (same YAML, edge deploy, free tier)
-- [x] 121 vitest tests on the TS runtime (100% pass)
-- [ ] Workers Durable Objects rate-limit backend (atomic multi-window on paid tier)
-- [ ] `outpost upstox-login` helper for the OAuth dance
-- [ ] WebSocket forwarding for streaming market data
-- [ ] Prometheus metrics endpoint
-- [ ] Pluggable secret backends (Vault, AWS Secrets Manager)
-- [ ] TypeScript port of the `outpost add-provider` wizard
+### What you'll see as a user
+
+- WebSocket / SSE forwarding (for streaming market data, Anthropic message streams, OpenAI realtime API)
+- Built-in provider YAMLs for GitHub, Slack, Jira, Notion, Twilio
+- Approval workflows (human-in-the-loop for `sensitive: true` calls)
+- Outpost + MCP first-class integration
+- More auth modules: AWS SigV4, GCP application default credentials, Azure AD
+- Outpost dashboard (optional) for provider config, audit logs, and rate-limit observability
+
+### What changes under the hood
+
+- Workers Durable Objects rate-limit backend (atomic multi-window on paid tier)
+- TypeScript port of the `outpost add-provider` wizard
+- Prometheus metrics endpoint
+- Pluggable secret backends (Vault, AWS Secrets Manager, Doppler, Infisical)
+- Static-IP egress option for Workers (paid Cloudflare feature wiring)
+- 1Password Connect, HashiCorp Vault Agent injectors
+
+Both lists are PRs welcome — see [Contributing](#contributing).
 
 ---
 
