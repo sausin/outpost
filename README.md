@@ -1,5 +1,7 @@
 # Outpost
 
+**Outpost — a capability-based credential proxy for AI agents.** Never hand raw keys to Claude, Cursor, or Aider again. Enforce what an agent can *actually do* with a few lines of YAML.
+
 > Give AI agents access to GitHub, Slack, Stripe, Jira, and any API — without ever exposing the underlying credentials.
 
 ```
@@ -29,6 +31,17 @@ Deploy globally in minutes using Cloudflare Workers — or self-host on any VPS 
 </p>
 
 > **Two runtimes, one YAML.** A **Python** runtime (FastAPI + Redis, full plugin escape hatch) and a **TypeScript** runtime (Hono + Redis/KV, deployable to Node *and* Cloudflare Workers). Same provider YAMLs, same forwarding rules, same auth modules, same security model. Pick whichever fits your deploy target.
+
+---
+
+## Contents
+
+- **Why** — [The Problem](#the-problem) · [The Principle](#the-principle) · [What This Prevents](#what-this-prevents) · [Why Now?](#why-now) · [Why Outpost?](#why-outpost)
+- **Get started** — [Quick Start](#quick-start) · [Works With](#works-with) · [3-Line Provider YAMLs](#3-line-provider-yamls) · [Adding Your Own Provider](#adding-your-own-provider)
+- **How it works** — [Built-in Auth Modules](#built-in-auth-modules) · [Forwarding Modes](#forwarding-modes) · [Choosing a Runtime](#choosing-a-runtime) · [Architecture](#architecture)
+- **Security** — [Security Model](#security-model) · [Threats Addressed](#threats-addressed) · [Limitations](#limitations)
+- **Compare** — [Why Not Environment Variables?](#why-not-environment-variables) · [Why Not Vault?](#why-not-vault) · [Outpost + MCP](#outpost--mcp) · [How It Compares](#how-it-compares)
+- **Reference** — [Example Use Cases](#example-use-cases) · [Management Endpoints](#management-endpoints) · [Idempotency](#idempotency) · [Roadmap](#roadmap) · [Contributing](#contributing)
 
 ---
 
@@ -132,6 +145,47 @@ The traditional secret management model breaks down when autonomous systems are 
 The agent's blast radius grew by orders of magnitude. The security model never changed.
 
 Outpost exists because agents are no longer passive assistants.
+
+---
+
+## Why Outpost?
+
+Most credential proxies for AI agents still leave too much trust in the agent. **Outpost moves the trust boundary to the proxy.**
+
+**The pain everyone feels**
+
+- Agents get tricked into exfiltrating keys via prompt injection.
+- Proxies that just *inject on the fly* still let a compromised agent fire off dangerous writes.
+- The popular alternatives are **MITM forward proxies** — you install a CA cert on every agent, trust a TLS-intercepting middlebox, and manage cert rotation forever.
+
+**Why Outpost wins**
+
+- **Capabilities, not credentials** — agents declare *what* they want to do; Outpost decides *if* they can. Even a fully compromised agent can't bypass a policy gate.
+- **No MITM, no CA cert** — Outpost is a clean reverse proxy: change one base URL, add an `X-Provider` header, done. Nothing to intercept, nothing to trust on the agent side.
+- **Policy enforced at the proxy** — sensitive-write gate (POST/PUT/DELETE/PATCH auto-flagged), path allow/deny lists, and a per-host `can_call_sensitive` grant — all enforced by Outpost, never by the agent behaving well.
+- **Real access control built in** — **source-IP allowlists** (CIDR-mapped), **per-host pre-shared keys** (constant-time compare), and **atomic multi-window rate limits**. Not "on the roadmap" — shipping today.
+- **Bring any auth scheme** — 10 built-in auth modules (bearer, basic, API-key, HMAC, OAuth2 client-credentials, …) plus a **Python/TS plugin escape hatch** for the exotic stuff (TOTP, SigV4, custom token minting).
+- **Deploy anywhere in seconds** — **Cloudflare Workers** for a free, global, zero-infra edge deploy, *or* Docker/Python with full plugins. Same YAML on both. No competitor runs on the edge.
+
+### Outpost vs. the field
+
+| Feature | **Outpost** | Agent Vault (Infisical) | Gap (mikekelly) |
+|---|---|---|---|
+| **Architecture** | Reverse proxy — base URL + `X-Provider` header | MITM forward proxy (`HTTPS_PROXY`) | MITM forward proxy (`HTTPS_PROXY`) |
+| **CA cert install on agent** | **None** | Required (TLS interception) | Required (TLS interception) |
+| **Agent never sees the secret** | yes | yes | yes |
+| **Policy gate agent can't bypass** | **Sensitive-write gate + path allow/deny** | Service rules + strict-deny mode | Token scope; rate-limit/approvals (early) |
+| **Source-IP access control** | **CIDR allowlist + per-host PSK** | host/egress rules | token-based |
+| **Rate limiting** | **Atomic multi-window buckets** | not documented | mentioned, early |
+| **Custom auth** | **10 modules + Python/TS plugins** | credential substitution | JS plugin transforms |
+| **Edge deploy (Cloudflare Workers)** | **yes — free tier** | no | no |
+| **Add a provider** | **3-line YAML** | service config | token + plugin |
+
+<sub>Compared against the public READMEs of [Infisical/agent-vault](https://github.com/Infisical/agent-vault) and [mikekelly/gap](https://github.com/mikekelly/gap) as of June 2026. Both are solid projects — the MITM model just makes a different trade: one `HTTPS_PROXY` covers every host with no per-provider config, at the cost of CA-cert trust on every agent. Outpost trades a per-provider base URL for needing no cert and running on the edge.</sub>
+
+> If you're tired of choosing between *easy but risky* and *secure but painful*, Outpost gives you both.
+
+⭐ Star it if you want AI agents that are actually safe to run in production.
 
 ---
 
