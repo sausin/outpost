@@ -5,6 +5,24 @@
 versioned alongside the runtime it pins; the catalog itself takes it by pull
 request.
 
+## Prerequisite: the pinned image must exist
+
+`ix_values.yaml` pins `ghcr.io/sausin/outpost-ts:0.4.0` and `app.yaml` declares
+`app_version: 0.4.0`. That tag is published by the release workflow when
+`v0.4.0` is pushed — **do this before opening the PR**, or their CI will fail on
+an unpullable image:
+
+```bash
+git checkout main && git merge claude/outpost-truenas-apps-9q2ha0
+git tag v0.4.0 && git push origin main v0.4.0
+```
+
+Separately, `ghcr.io/sausin/outpost-ts:0.3.2` is missing — the v0.3.2 release run
+was cancelled after the Python image had pushed. Once the release workflow is on
+`main`, backfill it from the Actions tab: **Release → Run workflow → tag
+`v0.3.2`**. That rebuilds the exact-version tags without moving `latest`,
+redeploying the Worker, or rewriting the release notes.
+
 ## Submitting it
 
 ```bash
