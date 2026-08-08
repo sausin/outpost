@@ -36,6 +36,12 @@ export const STARTER_HOSTS_YAML = `# Outpost host policy — who may talk to thi
 #                        \`openssl rand -hex 32\` and set it as an additional
 #                        environment variable on the app.
 #
+# WHICH ADDRESS DOES OUTPOST SEE? By default, the socket peer — so an agent on
+# your LAN shows up as its LAN address, and an agent in a container on the same
+# host shows up as the Docker bridge address (usually 172.16.0.0/12), NOT as
+# 127.0.0.1. Forwarding headers are ignored unless you set
+# OUTPOST_TRUSTED_PROXIES, because otherwise any caller could claim any address.
+#
 # After editing, restart Outpost — this file is read once at startup.
 
 hosts:

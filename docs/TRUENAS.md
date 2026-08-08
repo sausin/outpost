@@ -57,7 +57,7 @@ and writes nothing outside the config dataset and `/tmp`.
 
 | Form field    | Effect                                                                         |
 | ------------- | -------------------------------------------------------------------------------- |
-| **Web Port**  | Published host port, and `OUTPOST_PORT` inside the container. Default `30099`.    |
+| **Web Port**  | Published host port, and `OUTPOST_PORT` inside the container. Default `30461`.    |
 
 Outpost binds `0.0.0.0` inside the container (`OUTPOST_BIND_ADDRESS`).
 
@@ -93,6 +93,7 @@ overwritten afterwards.
 | `OUTPOST_DEFAULT_PROVIDER` | *(unset)*          | Provider used when the request carries no `X-Provider`   |
 | `OUTPOST_SEED_CONFIG`    | *(unset)*            | Set to `false` to disable first-boot config seeding      |
 | `REDIS_URL`              | `redis://localhost:6379/0` | Redis connection string                            |
+| `OUTPOST_TRUSTED_PROXIES` | *(unset)*           | Set when a reverse proxy fronts Outpost — see below      |
 | `OUTPOST_LOG_LEVEL`      | `info`               | Log verbosity                                            |
 | *provider credentials*   | —                    | Plain env vars named by your provider YAMLs              |
 
@@ -147,6 +148,18 @@ per-route caching, rate-limit windows, OAuth2, HMAC signing and the rest.
 `403`, so the seeded loopback-only policy is safe by default — and useless as
 soon as your agents run on another machine. When you widen it:
 
+0. **Know which address Outpost sees.** It matches on the socket peer, so an
+   agent on your LAN appears as its LAN address (`192.168.1.50`), and an agent
+   running in another container on the same TrueNAS box appears as the Docker
+   bridge address (usually somewhere in `172.16.0.0/12`) — *not* as
+   `127.0.0.1`. Check the logs for the denied address if a host will not match.
+
+   Forwarding headers are ignored by default, on purpose: honouring
+   `X-Forwarded-For` from an untrusted caller would let anyone claim to be
+   loopback and inherit its policy. If you put a reverse proxy in front, set
+   `OUTPOST_TRUSTED_PROXIES` (any non-empty value, e.g. the proxy's CIDR) and
+   Outpost will use the forwarded address instead.
+
 1. **Add a pre-shared key to every non-loopback host.** IP allowlisting alone is
    weak on a flat LAN (anything that can spoof or occupy an IP gets your
    credentials' capabilities). Give the host entry an `auth_token_env`:
@@ -199,9 +212,11 @@ error in `hosts.yaml`, or a missing env var named by a host's `auth_token_env`
 module failed to construct. The log line says which: `[bootstrap] Failed to
 build provider 'x': ...` — almost always an unset credential env var.
 
-**Agent gets `403 PROXY_HOST_DENIED`.** Its source IP does not match any CIDR in
-`hosts.yaml`. Note that Outpost sees the container-network source address unless
-you run a reverse proxy that sets `X-Forwarded-For`.
+**Agent gets `403 PROXY_HOST_DENIED`.** Its source address does not match any
+CIDR in `hosts.yaml`; the error message names the address it saw. Remember that
+this is the socket peer — a container on the same host arrives from the Docker
+bridge range, not from `127.0.0.1` — and that forwarding headers only count once
+`OUTPOST_TRUSTED_PROXIES` is set.
 
 **Agent gets `401 PROXY_AUTH_REQUIRED`.** The matched host has an
 `auth_token_env` and the request had no matching `X-Outpost-Auth` header.

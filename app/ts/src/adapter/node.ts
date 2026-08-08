@@ -15,9 +15,11 @@
 import { readFile } from "node:fs/promises";
 
 import { serve } from "@hono/node-server";
+import { getConnInfo } from "@hono/node-server/conninfo";
 
 import { buildAppDeps } from "../bootstrap.ts";
 import { seedConfig } from "../config/seed.ts";
+import { makeNodeClientIpResolver } from "../core/client_ip.ts";
 import { envFromNode } from "../core/env.ts";
 import { buildApp } from "../index.ts";
 import { loadProvidersFromDir } from "../providers/loader.ts";
@@ -72,6 +74,10 @@ async function main(): Promise<void> {
     tokenStorage,
     cache,
     rateLimits,
+    resolveClientIp: makeNodeClientIpResolver({
+      env,
+      socketAddress: (c) => getConnInfo(c).remote.address,
+    }),
   });
 
   const app = buildApp(deps);
