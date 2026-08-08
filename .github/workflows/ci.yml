@@ -127,12 +127,53 @@ jobs:
           cache-from: type=gha,scope=outpost-ts
           cache-to: type=gha,mode=max,scope=outpost-ts
 
-      - name: Smoke-test image
+      - name: Smoke-test image layout
         run: |
           docker run --rm --entrypoint sh outpost-ts:ci -c "
             test -f /app/dist/node.js || exit 1
+            test -f /app/dist/healthcheck.js || exit 1
             test -d /etc/outpost/providers || exit 1
             test -f /etc/outpost/hosts.yaml || exit 1
             id | grep -q 'uid=10001' || exit 1
             echo 'ts image OK'
           "
+
+      # App catalogs (TrueNAS et al.) start containers as an arbitrary
+      # non-root uid:gid — 568:568 there — with all capabilities dropped and
+      # no-new-privileges. If any of that regresses, the catalog listing
+      # breaks, so it is worth a real boot rather than a file-layout check.
+      - name: Boot as an arbitrary non-root UID (568:568)
+        run: |
+          docker run -d --name outpost-uid-test \
+            -u 568:568 \
+            --cap-drop ALL \
+            --security-opt no-new-privileges \
+            -p 18080:8080 \
+            outpost-ts:ci
+
+          for i in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:18080/healthz >/dev/null 2>&1; then
+              break
+            fi
+            sleep 1
+          done
+
+          echo "--- container logs ---"
+          docker logs outpost-uid-test
+
+          # /healthz must be 200 with zero providers configured: that is the
+          # state of every freshly installed app before credentials are set.
+          curl -fsS http://127.0.0.1:18080/healthz | tee /dev/stderr | grep -q '"providers":\[\]'
+
+          # Swagger UI is the only browser-facing page; catalog portals link it.
+          curl -fsS -o /dev/null http://127.0.0.1:18080/docs
+          curl -fsS -o /dev/null http://127.0.0.1:18080/openapi.json
+
+          # The container's own healthcheck mechanism, run as the same UID.
+          docker exec -u 568:568 outpost-uid-test node dist/healthcheck.js
+
+          # First boot must have seeded a starter config into the volume.
+          docker exec -u 568:568 outpost-uid-test test -f /config/hosts.yaml
+          docker exec -u 568:568 outpost-uid-test test -f /config/providers/example.yaml
+
+          docker rm -f outpost-uid-test

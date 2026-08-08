@@ -40,21 +40,28 @@ services:
     env_file: .env
     environment:
       REDIS_URL: redis://redis:6379/0
+      # Config lives under /config in both images. The OUTPOST_* names are the
+      # current ones (TypeScript runtime); the unprefixed pair is what the
+      # Python runtime reads. Setting both keeps this file runtime-agnostic.
+      OUTPOST_PROVIDERS_DIR: /config/providers
+      OUTPOST_HOSTS_FILE: /config/hosts.yaml
+      PROVIDERS_DIR: /config/providers
+      HOSTS_CONFIG_PATH: /config/hosts.yaml
       # Override PROVIDERS_DIR if you want to use external definitions instead.
       # EXTRA_PROVIDERS_DIR: /custom-providers
     ports: ["8080:8080"]
     volumes:
       # Both config locations are mounted read-only from the host repo. Edit
       # them on disk and `docker compose restart proxy` — no image rebuild.
-      # The image bakes the same files in as defaults, so a `docker run`
-      # without these mounts still works.
-      - ./hosts.yaml:/etc/outpost/hosts.yaml:ro
-      - ./app/builtin_providers:/etc/outpost/providers:ro
+      # Without these mounts the TypeScript image seeds /config with a starter
+      # hosts.yaml and a disabled example provider on first boot instead.
+      - ./hosts.yaml:/config/hosts.yaml:ro
+      - ./app/builtin_providers:/config/providers:ro
       # Optional: drop additional custom provider YAMLs (loaded on top of the
       # built-ins; same `name` overrides). Useful for one-off providers you
       # don't want to PR upstream.
-      # - ./my-providers:/etc/outpost/extra-providers:ro
-      # And set in .env: EXTRA_PROVIDERS_DIR=/etc/outpost/extra-providers
+      # - ./my-providers:/config/extra-providers:ro
+      # And set in .env: EXTRA_PROVIDERS_DIR=/config/extra-providers
 
 volumes:
   outpost_redis_data:

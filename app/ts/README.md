@@ -22,7 +22,7 @@ npm run dev        # wrangler dev — hot-reload on :8787
 
 ```bash
 npm install
-npm run dev:node   # tsx src/adapter/node.ts — listens on $PROXY_PORT (default 8080)
+npm run dev:node   # tsx src/adapter/node.ts — listens on $OUTPOST_PORT (default 8080)
 ```
 
 ### Type-check + lint
@@ -37,6 +37,8 @@ npm run format:check    # prettier --check src/
 ```
 src/
 ├── index.ts              # shared Hono app (Workers + Node mount this)
+├── openapi.ts            # OpenAPI 3.1 spec + Swagger UI shell served at /docs
+├── healthcheck.ts        # standalone container healthcheck entrypoint
 ├── adapter/
 │   ├── workers.ts        # Cloudflare Workers fetch handler
 │   └── node.ts           # Node.js HTTP server bootstrap
@@ -46,6 +48,8 @@ src/
 │   ├── pathmatch.ts      # glob → regex (mirrors app/core/pathmatch.py)
 │   ├── hosts.ts          # HostResolver + HostPolicy (mirrors app/core/hosts.py)
 │   └── env.ts            # env abstraction (process.env / Workers bindings)
+├── config/
+│   └── seed.ts           # first-boot starter hosts.yaml + example provider
 ├── providers/
 │   ├── schema.ts         # zod schemas (mirrors app/providers/schema.py)
 │   ├── loader.ts         # STUB: scan/load YAML providers

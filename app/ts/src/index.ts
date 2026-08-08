@@ -18,6 +18,7 @@ import {
   queryHash,
 } from "./core/cache_keys.ts";
 import type { AuthContext } from "./core/types.ts";
+import { buildOpenApi, SWAGGER_UI_HTML } from "./openapi.ts";
 import type { GenericProvider } from "./providers/provider.ts";
 import type { RateLimitBackend, CacheBackend } from "./storage/interface.ts";
 import { RateLimitedError } from "./storage/interface.ts";
@@ -96,6 +97,13 @@ export function buildApp(deps: AppDeps): Hono {
   app.get("/healthz", (c) =>
     c.json({ status: "ok", providers: [...providers.keys()].sort() }),
   );
+
+  // ── /openapi.json + /docs ─────────────────────────────────────────────────
+  // Regenerated per request so the X-Provider enum always reflects what is
+  // actually loaded — the spec is the one honest description of this instance.
+  app.get("/openapi.json", (c) => c.json(buildOpenApi([...providers.keys()])));
+
+  app.get("/docs", (c) => c.html(SWAGGER_UI_HTML));
 
   // ── /providers ────────────────────────────────────────────────────────────
   app.get("/providers", (c) =>

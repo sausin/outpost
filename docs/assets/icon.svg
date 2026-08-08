@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512" role="img" aria-label="Outpost">
+  <title>Outpost</title>
+  <!--
+    Concept: a watchtower holding a key. The secret stays inside the tower
+    (the keyhole is cut out of its body, showing only darkness); what leaves
+    is the signal from the beacon (the capability the agent gets).
+
+    Drawn as filled silhouettes with nothing thinner than ~16 units, so the
+    whole mark still reads at 40x40 in a catalog grid.
+  -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16233C"/>
+      <stop offset="1" stop-color="#0B1220"/>
+    </linearGradient>
+    <linearGradient id="stone" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#F1F5F9"/>
+      <stop offset="1" stop-color="#B9C6D8"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="112" fill="url(#bg)"/>
+
+  <!-- Beacon signal: two thick arcs radiating from the light. -->
+  <g fill="none" stroke="#FBBF24" stroke-width="18" stroke-linecap="round" opacity="0.95">
+    <path d="M154 118 A 116 116 0 0 1 186 60"/>
+    <path d="M358 118 A 116 116 0 0 0 326 60"/>
+  </g>
+
+  <!-- Beacon light. -->
+  <circle cx="256" cy="104" r="34" fill="#FBBF24"/>
+
+  <!-- Tower: parapet, tapered body, plinth. -->
+  <g fill="url(#stone)">
+    <path d="M170 156 h172 a12 12 0 0 1 12 12 v46 a12 12 0 0 1 -12 12 h-172 a12 12 0 0 1 -12 -12 v-46 a12 12 0 0 1 12 -12 z"/>
+    <path d="M186 226 h140 l26 190 h-192 z"/>
+    <path d="M136 416 h240 a14 14 0 0 1 14 14 v34 a14 14 0 0 1 -14 14 h-240 a14 14 0 0 1 -14 -14 v-34 a14 14 0 0 1 14 -14 z"/>
+  </g>
+
+  <!-- Keyhole cut out of the tower body: the credential never leaves. -->
+  <g fill="#0B1220">
+    <circle cx="256" cy="300" r="42"/>
+    <path d="M238 322 h36 l14 78 h-64 z"/>
+  </g>
+</svg>

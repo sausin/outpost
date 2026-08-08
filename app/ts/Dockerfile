@@ -41,7 +41,17 @@ COPY hosts.yaml ./hosts.yaml
 # --no-splitting keeps everything in one file; we don't generate .d.ts.
 # --loader .yaml=text teaches esbuild how to handle workers.ts's YAML
 # imports (text-bundling, mirrors wrangler's behavior).
+# Two entrypoints — the server and the standalone container healthcheck —
+# built in separate passes: tsup derives outDir structure from the common
+# parent of its entrypoints, so bundling both at once would bury the server at
+# dist/adapter/node.js. One entry per pass keeps dist/ flat.
 RUN npx tsup src/adapter/node.ts \
+      --format esm \
+      --outDir dist \
+      --target node22 \
+      --no-splitting \
+      --loader .yaml=text && \
+    npx tsup src/healthcheck.ts \
       --format esm \
       --outDir dist \
       --target node22 \
@@ -58,32 +68,49 @@ FROM node:22-alpine
 
 # tini → clean PID 1 signal handling.
 # ca-certificates → TLS to upstream APIs.
-# Pinned UID/GID 10001 so Kubernetes runAsNonRoot + runAsUser: 10001 work.
+# UID/GID 10001 is only the DEFAULT. The image runs correctly under any
+# uid:gid the orchestrator picks (TrueNAS uses 568:568, OpenShift assigns a
+# random high UID): nothing is chowned at startup, nothing outside the config
+# volume and /tmp is written to, and every shipped file is world-readable.
 RUN apk add --no-cache tini ca-certificates && \
     addgroup -g 10001 outpost && \
     adduser -D -u 10001 -G outpost -h /app -s /sbin/nologin outpost
 
 WORKDIR /app
 
-COPY --from=builder --chown=outpost:outpost /build/dist ./dist
-COPY --from=builder --chown=outpost:outpost /build/node_modules ./node_modules
-COPY --from=builder --chown=outpost:outpost /build/package.json ./package.json
+COPY --from=builder /build/dist ./dist
+COPY --from=builder /build/node_modules ./node_modules
+COPY --from=builder /build/package.json ./package.json
 
-# Vendored config — baked in as defaults so `docker run` works without volume
-# mounts. Compose deployments shadow these with host-side mounts at the same
-# paths, letting operators edit YAMLs and restart without an image rebuild.
-COPY --chown=outpost:outpost app/builtin_providers /etc/outpost/providers
-COPY --chown=outpost:outpost hosts.yaml /etc/outpost/hosts.yaml
+# Reference copies of the vendored provider definitions and the upstream
+# hosts.yaml. NOT loaded by default (the config volume at /config is), but
+# handy to copy from: `docker cp`, or point OUTPOST_PROVIDERS_DIR here to run
+# with the built-ins.
+COPY app/builtin_providers /etc/outpost/providers
+COPY hosts.yaml /etc/outpost/hosts.yaml
+
+# Config volume. 0777 because the uid that will own the mounted dataset is not
+# known at build time and we refuse to chown at startup — on any real deploy a
+# volume is mounted over this and the host's permissions take over. Contents
+# are config the operator writes, never secrets (those are env vars).
+RUN mkdir -p /config/providers && \
+    chmod -R 0777 /config && \
+    chmod -R a+rX /app /etc/outpost
 
 ENV NODE_ENV=production \
-    PROVIDERS_DIR=/etc/outpost/providers \
-    HOSTS_CONFIG_PATH=/etc/outpost/hosts.yaml
+    OUTPOST_PORT=8080 \
+    OUTPOST_BIND_ADDRESS=0.0.0.0 \
+    OUTPOST_PROVIDERS_DIR=/config/providers \
+    OUTPOST_HOSTS_FILE=/config/hosts.yaml
 
-USER outpost
+USER 10001:10001
 EXPOSE 8080
 
-HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
-    CMD wget -qO- http://localhost:8080/healthz || exit 1
+# Built-in healthcheck: no curl/wget dependency, honours OUTPOST_PORT, and
+# exits 0/1 off GET /healthz. App catalogs that run their own probe inside the
+# container can invoke the same command: `node dist/healthcheck.js`.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+    CMD ["node", "dist/healthcheck.js"]
 
 LABEL org.opencontainers.image.title="Outpost (TypeScript)" \
       org.opencontainers.image.description="The edge sidecar for AI agents — TypeScript/Node runtime, also deployable to Cloudflare Workers" \
