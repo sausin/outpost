@@ -4,13 +4,27 @@ on:
   push:
     tags:
       - "v*"
+  # Manual re-run for an existing tag. Use it to backfill an image when a
+  # release run was cancelled or failed after only some images had pushed —
+  # it rebuilds and re-pushes the exact-version tags without cutting a new
+  # release and without moving `latest`.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing git tag to (re)build images for, e.g. v0.3.2"
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.tag || github.ref }}
   cancel-in-progress: false
+
+env:
+  # The tag the whole workflow operates on, whichever way it was triggered.
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
   docker-python:
@@ -22,6 +36,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -42,10 +58,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/outpost-python
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
           labels: |
             org.opencontainers.image.title=Outpost (Python)
             org.opencontainers.image.description=The edge sidecar for AI agents — Python runtime
@@ -72,6 +88,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.RELEASE_TAG }}
 
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v3
@@ -92,10 +110,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/outpost-ts
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=semver,pattern={{major}}
-            type=raw,value=latest
+            type=semver,pattern={{version}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.RELEASE_TAG }}
+            type=semver,pattern={{major}},value=${{ env.RELEASE_TAG }}
+            type=raw,value=latest,enable=${{ github.event_name == 'push' }}
           labels: |
             org.opencontainers.image.title=Outpost (TypeScript)
             org.opencontainers.image.description=The edge sidecar for AI agents — TypeScript/Node runtime
@@ -120,7 +138,8 @@ jobs:
     # Only fires when CLOUDFLARE_API_TOKEN is configured as a repo secret.
     # Without it, this job is silently skipped — perfect for self-hosters
     # who don't use the Workers path.
-    if: ${{ github.repository_owner == 'sausin' }}
+    # Tag pushes only: a manual image backfill must not redeploy the edge.
+    if: ${{ github.repository_owner == 'sausin' && github.event_name == 'push' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -149,6 +168,9 @@ jobs:
     name: Publish release notes
     needs: [docker-python, docker-ts]
     runs-on: ubuntu-latest
+    # Tag pushes only: backfilling an image for an already-published release
+    # must not rewrite that release's notes.
+    if: ${{ github.event_name == 'push' }}
     permissions:
       contents: write
     steps:

@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <!-- Outpost: a watchtower that keeps the key inside; only the signal leaves. -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#16232e"/>
+      <stop offset="1" stop-color="#0b141c"/>
+    </linearGradient>
+    <radialGradient id="beam" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#ffc45c" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffc45c" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <!-- rounded-square tile -->
+  <rect x="0" y="0" width="512" height="512" rx="96" fill="url(#bg)"/>
+
+  <!-- beacon glow -->
+  <circle cx="256" cy="132" r="118" fill="url(#beam)"/>
+
+  <!-- signal arcs (capability leaving the outpost) -->
+  <g fill="none" stroke="#ffc45c" stroke-width="18" stroke-linecap="round">
+    <path d="M 168 96 A 122 122 0 0 1 344 96" opacity="0.45"/>
+    <path d="M 196 122 A 84 84 0 0 1 316 122" opacity="0.8"/>
+  </g>
+
+  <!-- beacon light -->
+  <circle cx="256" cy="150" r="26" fill="#ffc45c"/>
+
+  <!-- tower: crenellated top, tapered body -->
+  <path d="M 176 208
+           L 176 176 L 208 176 L 208 196 L 236 196 L 236 176 L 276 176 L 276 196 L 304 196 L 304 176 L 336 176 L 336 208
+           L 322 240 L 348 402
+           L 366 402 L 366 428 L 146 428 L 146 402 L 164 402 L 190 240 Z"
+        fill="#e8edf2"/>
+
+  <!-- keyhole: the secret stays inside -->
+  <g fill="#16232e">
+    <circle cx="256" cy="296" r="30"/>
+    <path d="M 244 314 L 268 314 L 260 372 L 252 372 Z"/>
+  </g>
+</svg>

@@ -37,9 +37,11 @@ FROM python:3.12-alpine
 
 # tini → clean PID 1 signal handling.
 # ca-certificates → TLS to any upstream API.
-# Pinned UID/GID 10001 so Kubernetes runAsNonRoot + runAsUser: 10001 work
-# without discovery; outside the SYS_UID range so it never collides with
-# Alpine system accounts.
+# UID/GID 10001 is only the DEFAULT (outside the SYS_UID range, so it never
+# collides with Alpine system accounts). The image also runs correctly under
+# any uid:gid the orchestrator picks — TrueNAS uses 568:568 — because nothing
+# is chowned at startup, nothing outside /tmp is written to, and every shipped
+# file is world-readable.
 RUN apk add --no-cache tini ca-certificates && \
     addgroup -g 10001 app && \
     adduser -D -u 10001 -G app -h /app -s /sbin/nologin app
@@ -69,7 +71,11 @@ COPY --chown=app:app hosts.yaml /etc/outpost/hosts.yaml
 ENV PROVIDERS_DIR=/etc/outpost/providers \
     HOSTS_CONFIG_PATH=/etc/outpost/hosts.yaml
 
-USER app
+# Guarantee the world-readable bit rather than trusting the build umask —
+# an arbitrary UID must be able to read the venv and the vendored config.
+RUN chmod -R a+rX /app /etc/outpost /opt/venv
+
+USER 10001:10001
 EXPOSE 8080
 
 # wget is provided by busybox in the alpine base — no extra package needed.
