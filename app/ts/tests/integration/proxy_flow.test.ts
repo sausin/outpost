@@ -1,6 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import type { Context } from "hono";
 import { buildApp } from "../../src/index.ts";
 import { buildAppDeps } from "../../src/bootstrap.ts";
+import { makeNodeClientIpResolver } from "../../src/core/client_ip.ts";
+import { envFromWorkers } from "../../src/core/env.ts";
+import type { AppEnv } from "../../src/core/env.ts";
 import { ProviderSchema } from "../../src/providers/schema.ts";
 import { InMemoryStorage } from "../helpers/in_memory_storage.ts";
 import type {
@@ -72,6 +76,29 @@ function fakeRateLimits(
   };
 }
 
+/**
+ * Test-side stand-in for the Node adapter's socket-address source.  The real
+ * adapter reads the TCP socket via getConnInfo; here the peer comes from the
+ * Hono env passed as the third argument to `app.request()`, defaulting to
+ * loopback so the common path needs no ceremony:
+ *   app.request(r)                              → peer 127.0.0.1
+ *   app.request(r, undefined, peer("10.9.9.9")) → peer 10.9.9.9
+ * The resolver itself is the real one from core/client_ip.ts.
+ */
+interface TestEnv {
+  peer?: string;
+}
+const DEFAULT_PEER = "127.0.0.1";
+function testSocketAddress(c: Context): string | undefined {
+  return (c.env as TestEnv | undefined)?.peer ?? DEFAULT_PEER;
+}
+function peer(ip: string): TestEnv {
+  return { peer: ip };
+}
+function testResolveClientIp(env: AppEnv) {
+  return makeNodeClientIpResolver({ env, socketAddress: testSocketAddress });
+}
+
 async function makeApp(
   opts: {
     hostsYaml?: string;
@@ -80,21 +107,18 @@ async function makeApp(
     extraEnv?: Record<string, string>;
   } = {},
 ) {
+  const env = envFromWorkers({
+    STRIPE_KEY: "sk_test_abc",
+    ...(opts.extraEnv ?? {}),
+  });
   const deps = await buildAppDeps({
-    env: {
-      DEFAULT_PROVIDER: "",
-      PROVIDERS_DIR: "",
-      HOSTS_CONFIG_PATH: "",
-      PROXY_PORT: "",
-      LOG_LEVEL: "",
-      STRIPE_KEY: "sk_test_abc",
-      ...(opts.extraEnv ?? {}),
-    },
+    env,
     defs: new Map([["stripe", STRIPE_DEF]]),
     hostsYaml: opts.hostsYaml ?? HOSTS_YAML,
     tokenStorage: new InMemoryStorage(),
     cache: fakeCache(opts.cacheStore),
     rateLimits: opts.rateLimits ?? fakeRateLimits(),
+    resolveClientIp: testResolveClientIp(env),
   });
   return buildApp(deps);
 }
@@ -108,10 +132,7 @@ function req(
 ): Request {
   return new Request(`http://proxy${path}`, {
     method: opts.method ?? "GET",
-    headers: {
-      "x-forwarded-for": "127.0.0.1",
-      ...opts.headers,
-    },
+    headers: opts.headers ?? {},
   });
 }
 
@@ -159,16 +180,69 @@ describe("integration: proxy_flow", () => {
 
   test("source IP not in hosts.yaml returns 403 PROXY_HOST_DENIED", async () => {
     const app = await makeApp();
-    const r = new Request("http://proxy/v1/charges", {
-      headers: {
-        "x-provider": "stripe",
-        "x-forwarded-for": "10.99.99.99", // not in hosts.yaml
-      },
-    });
-    const res = await app.request(r);
+    const r = req("/v1/charges", { headers: { "x-provider": "stripe" } });
+    // peer 10.99.99.99 is not in hosts.yaml
+    const res = await app.request(r, undefined, peer("10.99.99.99"));
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: { code: string } };
     expect(body.error.code).toBe("PROXY_HOST_DENIED");
+  });
+
+  test("spoofed X-Forwarded-For from an untrusted peer is ignored (still 403)", async () => {
+    const app = await makeApp();
+    const r = req("/v1/charges", {
+      headers: {
+        "x-provider": "stripe",
+        "x-forwarded-for": "127.0.0.1", // allowed IP, but the caller isn't a trusted proxy
+        "cf-connecting-ip": "127.0.0.1",
+      },
+    });
+    const res = await app.request(r, undefined, peer("10.99.99.99"));
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as {
+      error: { code: string; message: string };
+    };
+    expect(body.error.code).toBe("PROXY_HOST_DENIED");
+    expect(body.error.message).toContain("10.99.99.99");
+  });
+
+  test("X-Forwarded-For is honoured when the peer is in TRUSTED_PROXIES", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const app = await makeApp({ extraEnv: { TRUSTED_PROXIES: "10.0.0.0/8" } });
+    const r = req("/v1/charges", {
+      headers: {
+        "x-provider": "stripe",
+        "x-forwarded-for": "127.0.0.1", // real client, as reported by the proxy
+      },
+    });
+    const res = await app.request(r, undefined, peer("10.0.0.5"));
+    expect(res.status).toBe(200);
+  });
+
+  test("direct caller with no forwarding headers is identified by the socket peer", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const app = await makeApp({
+      hostsYaml: `
+hosts:
+  - id: lan
+    cidrs: ["192.168.50.0/24"]
+    can_call_sensitive: false
+`,
+    });
+    const r = req("/v1/charges", { headers: { "x-provider": "stripe" } });
+    // Node reports IPv4 peers on a dual-stack listener as ::ffff:a.b.c.d
+    const res = await app.request(r, undefined, peer("::ffff:192.168.50.199"));
+    expect(res.status).toBe(200);
   });
 
   test("allowlist miss returns 404 PROXY_NO_ROUTE", async () => {
@@ -183,15 +257,10 @@ describe("integration: proxy_flow", () => {
   });
 
   test("sensitive path + non-sensitive host returns 403 PROXY_SENSITIVE_DENIED", async () => {
+    const env = envFromWorkers({ STRIPE_KEY: "sk_test" });
     const depsInput = {
-      env: {
-        DEFAULT_PROVIDER: "",
-        PROVIDERS_DIR: "",
-        HOSTS_CONFIG_PATH: "",
-        PROXY_PORT: "",
-        LOG_LEVEL: "",
-        STRIPE_KEY: "sk_test",
-      },
+      env,
+      resolveClientIp: testResolveClientIp(env),
       defs: new Map([["stripe", STRIPE_DEF]]),
       hostsYaml: `
 hosts:
@@ -211,7 +280,6 @@ hosts:
       method: "POST",
       headers: {
         "x-provider": "stripe",
-        "x-forwarded-for": "127.0.0.1",
         "content-type": "application/json",
       },
       body: JSON.stringify({ amount: 100 }),
@@ -310,14 +378,10 @@ hosts:
       },
     });
 
+    const env = envFromWorkers({});
     const depsInput = {
-      env: {
-        DEFAULT_PROVIDER: "",
-        PROVIDERS_DIR: "",
-        HOSTS_CONFIG_PATH: "",
-        PROXY_PORT: "",
-        LOG_LEVEL: "",
-      },
+      env,
+      resolveClientIp: testResolveClientIp(env),
       defs: new Map([["brex", redisDef]]),
       hostsYaml: HOSTS_YAML,
       tokenStorage: storage,
@@ -336,10 +400,7 @@ hosts:
     );
 
     const r = new Request("http://proxy/v1/accounts", {
-      headers: {
-        "x-provider": "brex",
-        "x-forwarded-for": "127.0.0.1",
-      },
+      headers: { "x-provider": "brex" },
     });
     await app.request(r);
     expect(await storage.get("stripe:token")).toBeNull();

@@ -18,6 +18,12 @@ export interface AppEnv {
   PROXY_PORT: string;
   BIND_ADDRESS: string;
   LOG_LEVEL: string;
+  /**
+   * Comma-separated IPs / CIDRs of reverse proxies whose forwarding headers
+   * (X-Forwarded-For, CF-Connecting-IP, X-Real-IP) may be trusted.  Empty =
+   * the socket peer is always the client.  Same semantics as the Python runtime.
+   */
+  TRUSTED_PROXIES: string;
 
   // Workers: KV bindings; Node: undefined (Redis used instead in Phase 4)
   TOKENS?: KVNamespace;
@@ -56,7 +62,20 @@ function build(source: Record<string, unknown>): AppEnv {
     // reachable from the outside, and sibling containers resolve us by name.
     BIND_ADDRESS: pick(source, ["OUTPOST_BIND_ADDRESS", "PROXY_HOST"], "0.0.0.0"), // prettier-ignore
     LOG_LEVEL: pick(source, ["OUTPOST_LOG_LEVEL", "LOG_LEVEL"], "info"),
+    TRUSTED_PROXIES: pick(source, ["OUTPOST_TRUSTED_PROXIES", "TRUSTED_PROXIES"], ""), // prettier-ignore
   };
+}
+
+/**
+ * Split TRUSTED_PROXIES into its entries.  Whitespace-tolerant; empty items
+ * dropped.  Validation of each IP / CIDR happens in ClientIpResolver.
+ */
+export function parseTrustedProxies(raw: string | undefined | null): string[] {
+  if (typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }
 
 export function envFromNode(): AppEnv {

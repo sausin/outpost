@@ -47,6 +47,8 @@ src/
 │   ├── errors.ts         # error envelope + CODES
 │   ├── pathmatch.ts      # glob → regex (mirrors app/core/pathmatch.py)
 │   ├── hosts.ts          # HostResolver + HostPolicy (mirrors app/core/hosts.py)
+│   ├── client_ip.ts      # client IP: socket peer is authoritative; X-Forwarded-For /
+│   │                     #   CF-Connecting-IP honoured only from OUTPOST_TRUSTED_PROXIES
 │   └── env.ts            # env abstraction (process.env / Workers bindings)
 ├── config/
 │   └── seed.ts           # first-boot starter hosts.yaml + example provider

@@ -157,8 +157,9 @@ soon as your agents run on another machine. When you widen it:
    Forwarding headers are ignored by default, on purpose: honouring
    `X-Forwarded-For` from an untrusted caller would let anyone claim to be
    loopback and inherit its policy. If you put a reverse proxy in front, set
-   `OUTPOST_TRUSTED_PROXIES` (any non-empty value, e.g. the proxy's CIDR) and
-   Outpost will use the forwarded address instead.
+   `OUTPOST_TRUSTED_PROXIES` to the proxy's address or CIDR (comma-separated
+   for several) and Outpost will use the forwarded address, but only for
+   connections that actually arrive from one of those addresses.
 
 1. **Add a pre-shared key to every non-loopback host.** IP allowlisting alone is
    weak on a flat LAN (anything that can spoof or occupy an IP gets your
@@ -215,8 +216,8 @@ build provider 'x': ...` — almost always an unset credential env var.
 **Agent gets `403 PROXY_HOST_DENIED`.** Its source address does not match any
 CIDR in `hosts.yaml`; the error message names the address it saw. Remember that
 this is the socket peer — a container on the same host arrives from the Docker
-bridge range, not from `127.0.0.1` — and that forwarding headers only count once
-`OUTPOST_TRUSTED_PROXIES` is set.
+bridge range, not from `127.0.0.1` — and that forwarding headers only count when
+the connection comes from an address listed in `OUTPOST_TRUSTED_PROXIES`.
 
 **Agent gets `401 PROXY_AUTH_REQUIRED`.** The matched host has an
 `auth_token_env` and the request had no matching `X-Outpost-Auth` header.
