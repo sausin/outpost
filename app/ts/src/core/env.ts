@@ -24,6 +24,19 @@ export interface AppEnv {
    * the socket peer is always the client.  Same semantics as the Python runtime.
    */
   TRUSTED_PROXIES: string;
+  /**
+   * Serve the status dashboard at /dashboard and its JSON at /api/overview.
+   * "true" | "false"; defaults on. Neither page ever contains a secret value,
+   * but they do show the host policy and credential env var NAMES.
+   */
+  DASHBOARD: string;
+  /**
+   * Re-read providers/ and hosts.yaml when they change on disk (Node only).
+   * "true" | "false"; defaults on. Same idea as Traefik's file-provider watch.
+   */
+  CONFIG_WATCH: string;
+  /** Release version baked into the image; "dev" when unset. */
+  VERSION: string;
 
   // Workers: KV bindings; Node: undefined (Redis used instead in Phase 4)
   TOKENS?: KVNamespace;
@@ -63,7 +76,16 @@ function build(source: Record<string, unknown>): AppEnv {
     BIND_ADDRESS: pick(source, ["OUTPOST_BIND_ADDRESS", "PROXY_HOST"], "0.0.0.0"), // prettier-ignore
     LOG_LEVEL: pick(source, ["OUTPOST_LOG_LEVEL", "LOG_LEVEL"], "info"),
     TRUSTED_PROXIES: pick(source, ["OUTPOST_TRUSTED_PROXIES", "TRUSTED_PROXIES"], ""), // prettier-ignore
+    DASHBOARD: pick(source, ["OUTPOST_DASHBOARD"], "true"),
+    CONFIG_WATCH: pick(source, ["OUTPOST_CONFIG_WATCH"], "true"),
+    VERSION: pick(source, ["OUTPOST_VERSION", "VERSION"], "dev"),
   };
+}
+
+/** Boolean env flag: anything but "false"/"0"/"no"/"off" (case-insensitive) is on. */
+export function envFlag(raw: string | undefined | null): boolean {
+  if (typeof raw !== "string") return true;
+  return !["false", "0", "no", "off"].includes(raw.trim().toLowerCase());
 }
 
 /**

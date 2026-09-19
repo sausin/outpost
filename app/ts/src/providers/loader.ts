@@ -13,12 +13,28 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 
 import yaml from "js-yaml";
+import { ZodError } from "zod";
 
+import type { ConfigProblem } from "../core/types.ts";
 import { ProviderSchema } from "./schema.ts";
 import type { ProviderDef } from "./schema.ts";
 
+/** One line per problem — `base_url: Invalid url` — instead of zod's JSON dump. */
+function describeParseError(err: unknown): string {
+  if (err instanceof ZodError) {
+    return err.issues
+      .map((i) => `${i.path.join(".") || "(root)"}: ${i.message}`)
+      .join("; ");
+  }
+  return err instanceof Error ? err.message : String(err);
+}
+
 export interface ProviderLoadResult {
   providers: Map<string, ProviderDef>;
+  /** Sources that failed to parse or validate — logged, skipped, and shown on the status page. */
+  problems: ConfigProblem[];
+  /** Providers present on disk but `enabled: false`. */
+  disabled: Array<{ name: string; source: string }>;
 }
 
 /**
@@ -29,6 +45,8 @@ export async function loadProvidersFromYamls(
   sources: Array<{ name: string; content: string }>,
 ): Promise<ProviderLoadResult> {
   const byName = new Map<string, ProviderDef>();
+  const problems: ConfigProblem[] = [];
+  const disabled: Array<{ name: string; source: string }> = [];
 
   for (const { name: sourceName, content } of sources) {
     let def: ProviderDef;
@@ -36,9 +54,11 @@ export async function loadProvidersFromYamls(
       const raw = yaml.load(content);
       def = ProviderSchema.parse(raw);
     } catch (err) {
+      const message = describeParseError(err);
       console.error(
-        `[loader] Failed to parse provider YAML '${sourceName}': ${err}`,
+        `[loader] Failed to parse provider YAML '${sourceName}': ${message}`,
       );
+      problems.push({ scope: "provider", source: sourceName, message });
       continue;
     }
 
@@ -46,6 +66,7 @@ export async function loadProvidersFromYamls(
       console.info(
         `[loader] Provider '${def.name}' is disabled (source=${sourceName}); skipping`,
       );
+      disabled.push({ name: def.name, source: sourceName });
       continue;
     }
 
@@ -62,7 +83,7 @@ export async function loadProvidersFromYamls(
     byName.set(def.name, def);
   }
 
-  return { providers: byName };
+  return { providers: byName, problems, disabled };
 }
 
 /**
@@ -76,10 +97,13 @@ export async function loadProvidersFromDir(
   try {
     entries = await readdir(dir);
   } catch (err) {
-    console.warn(
-      `[loader] Providers dir does not exist or is not readable: ${dir} — ${err}`,
-    );
-    return { providers: new Map() };
+    const message = `Providers dir does not exist or is not readable: ${dir} — ${err instanceof Error ? err.message : String(err)}`;
+    console.warn(`[loader] ${message}`);
+    return {
+      providers: new Map(),
+      problems: [{ scope: "config", source: dir, message }],
+      disabled: [],
+    };
   }
 
   const yamlFiles = entries

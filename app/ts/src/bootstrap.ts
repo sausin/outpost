@@ -10,6 +10,7 @@ import type { Context } from "hono";
 import { resolve as resolveAuth } from "./auth/registry.ts";
 import type { AppEnv } from "./core/env.ts";
 import { loadHostsFromYaml } from "./core/hosts.ts";
+import type { ConfigProblem } from "./core/types.ts";
 import type { AppDeps } from "./index.ts";
 import { GenericProvider } from "./providers/provider.ts";
 import type { ProviderDef } from "./providers/schema.ts";
@@ -38,6 +39,7 @@ export interface BootstrapInput {
  */
 export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
   const built = new Map<string, GenericProvider>();
+  const problems: ConfigProblem[] = [];
 
   for (const [name, def] of input.defs) {
     try {
@@ -54,7 +56,11 @@ export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
       built.set(name, new GenericProvider(def, auth));
       console.info(`[bootstrap] Built provider '${name}'`);
     } catch (err) {
-      console.error(`[bootstrap] Failed to build provider '${name}': ${err}`);
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(
+        `[bootstrap] Failed to build provider '${name}': ${message}`,
+      );
+      problems.push({ scope: "provider", source: name, message });
     }
   }
 
@@ -67,5 +73,6 @@ export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
     cache: input.cache,
     defaultProvider: input.env.DEFAULT_PROVIDER,
     resolveClientIp: input.resolveClientIp,
+    problems,
   };
 }

@@ -36,16 +36,22 @@ auth: { type: bearer_static, env: GITHUB_TOKEN }
 - Both run as any non-root uid:gid, `cap_drop: [ALL]`, `no-new-privileges`.
 - One config dataset at `/config` holding `hosts.yaml` and `providers/`; upstream
   seeds both with commented starters on first boot so a fresh install is not an
-  empty directory.
+  empty directory, and watches the dataset so edits apply without a restart
+  (as the Traefik app's config directory does).
 - Provider credentials go in Additional Environment Variables, never on the
   dataset.
+- A **Dashboard** toggle (default on, like Traefik's) and the portal opens it: a
+  read-only status page showing loaded providers, the host policy, config
+  errors and the address the viewer arrives from. It never displays a
+  credential value.
 - Healthcheck runs the image's own entrypoint (no dependency on `curl`/`wget`
-  being present); portal points at `/docs`.
+  being present).
 
 ## Status
 
 The app definition is written and passing locally against `basic-values.yaml`. I
-will open a draft PR shortly with the icon attached for CDN upload.
+will open a draft PR shortly with the icon and a dashboard screenshot attached
+for CDN upload.
 
 Happy to adjust anything about the questions.yaml layout or the category choice
 (`security`) before you spend review time on it.

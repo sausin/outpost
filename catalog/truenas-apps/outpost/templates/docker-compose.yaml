@@ -25,6 +25,10 @@
 {% do c1.environment.add_env("OUTPOST_PROVIDERS_DIR", values.consts.config_path ~ "/providers") %}
 {% do c1.environment.add_env("OUTPOST_HOSTS_FILE", values.consts.config_path ~ "/hosts.yaml") %}
 {% do c1.environment.add_env("OUTPOST_DEFAULT_PROVIDER", values.outpost.default_provider) %}
+{% do c1.environment.add_env("OUTPOST_DASHBOARD", values.outpost.dashboard) %}
+{# Same idea as Traefik's --providers.file.watch: edits to the config dataset
+   apply live, so there is no "restart the app after editing" step. #}
+{% do c1.environment.add_env("OUTPOST_CONFIG_WATCH", true) %}
 {% do c1.environment.add_env("REDIS_URL", redis.get_url("redis")) %}
 
 {# Provider credentials (GITHUB_TOKEN, STRIPE_SECRET_KEY, ...) arrive here. #}
@@ -45,16 +49,19 @@
   {% do redis.container.depends.add_dependency(values.consts.perms_container_name, "service_completed_successfully") %}
 {% endif %}
 
-{# Swagger UI is the only browser-facing page Outpost serves. #}
-{% do tpl.portals.add(values.network.web_port, {"path": "/docs"}) %}
+{# The portal opens the status dashboard; with it switched off, the API docs. #}
+{% do tpl.portals.add(values.network.web_port, {"path": "/dashboard" if values.outpost.dashboard else "/docs"}) %}
 
 {# First-run guidance. Each add_info renders as one bullet, so keep them
    single-line and let docs/TRUENAS.md carry the long form. #}
+{% if values.outpost.dashboard %}
+{% do tpl.notes.add_info("**Open the dashboard** (the portal link, `/dashboard`): it shows what loaded, the host policy, whether each credential variable is set, any configuration error, and the address Outpost sees your browser as. No credential value is ever shown.") %}
+{% endif %}
 {% do tpl.notes.add_info("**Add a provider**: drop a YAML file into `providers/` on the config dataset — `name`, `base_url` and an `auth` block naming an environment variable is enough. A commented `hosts.yaml` and a disabled `example.yaml` are written there on first boot.") %}
 {% do tpl.notes.add_info("**Set the credential**: edit this app and add the environment variable your provider names (e.g. `GITHUB_TOKEN`) under *Additional Environment Variables*. Credentials live only there — never on the config dataset, and never in front of your agents.") %}
-{% do tpl.notes.add_info("**Restart after editing**: provider YAMLs and `hosts.yaml` are read once at startup. `GET /providers` lists what loaded; the portal link opens the API docs.") %}
+{% do tpl.notes.add_info("**Edits apply live**: provider YAMLs and `hosts.yaml` are re-read whenever they change on the dataset, so there is no restart step. A file that fails to parse is reported on the dashboard and the previous configuration stays in force.") %}
 {% do tpl.notes.add_info("**Point your agent at** `http://<truenas-ip>:%s` with an `X-Provider: <name>` header. Outpost injects the credential and forwards the call, so the agent never sees the secret."|format(values.network.web_port.port_number)) %}
-{% do tpl.notes.add_info("**Allow your agent's address**: the seeded `hosts.yaml` permits loopback only and everything else gets a 403. Outpost matches on the source address it actually sees — a LAN agent by its LAN address, a container on this host by the Docker bridge address, not 127.0.0.1.") %}
+{% do tpl.notes.add_info("**Allow your agent's address**: the seeded `hosts.yaml` permits loopback only and everything else gets a 403. Outpost matches on the source address it actually sees — a LAN agent by its LAN address, a container on this host by the Docker bridge address, not 127.0.0.1. The dashboard's *Your connection* card shows exactly which address that is and the `hosts.yaml` lines to allow it.") %}
 {% do tpl.notes.add_info("**Before widening access**: give every non-loopback host an `auth_token_env` pre-shared key and prefer `forwarding.mode: allowlist` on its providers. See https://github.com/sausin/outpost/blob/main/docs/TRUENAS.md") %}
 
 {{ tpl.render() | tojson }}

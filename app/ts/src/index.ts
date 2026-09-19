@@ -18,9 +18,11 @@ import {
   IDEM_TTL_SECONDS,
   queryHash,
 } from "./core/cache_keys.ts";
-import type { AuthContext } from "./core/types.ts";
+import type { AuthContext, ConfigProblem } from "./core/types.ts";
 import { buildOpenApi, SWAGGER_UI_HTML } from "./openapi.ts";
 import type { GenericProvider } from "./providers/provider.ts";
+import { buildOverview, DASHBOARD_HTML } from "./status.ts";
+import type { StatusSource } from "./status.ts";
 import type { RateLimitBackend, CacheBackend } from "./storage/interface.ts";
 import { RateLimitedError } from "./storage/interface.ts";
 
@@ -92,6 +94,12 @@ export interface AppDeps {
    * declared, so the socket peer is used instead.
    */
   resolveClientIp?: (c: Context) => string | undefined;
+  /** Config problems found while building these deps (shown on /dashboard). */
+  problems?: ConfigProblem[];
+  /** Runtime facts for the status page; see StatusSource. */
+  status?: StatusSource;
+  /** Serve /dashboard and /api/overview. Defaults to true. */
+  dashboard?: boolean;
 }
 
 /**
@@ -111,44 +119,102 @@ export function clientIpFromHeaders(c: Context): string | undefined {
 /** Log warning once per X-Broker usage to nudge callers to migrate. */
 const _brokerWarnedProviders = new Set<string>();
 
-export function buildApp(deps: AppDeps): Hono {
-  const { providers, hosts, rateLimits, cache, defaultProvider } = deps;
-  const resolveClientIp = deps.resolveClientIp ?? clientIpFromHeaders;
+/**
+ * Build the Hono app. `deps` may be a function: the Node adapter passes one so
+ * a config reload can swap in a fresh AppDeps without rebuilding the app or
+ * dropping in-flight requests — each request reads the current deps once.
+ */
+export function buildApp(deps: AppDeps | (() => AppDeps)): Hono {
+  const getDeps = typeof deps === "function" ? deps : () => deps;
 
   const app = new Hono();
 
   // ── /healthz ───────────────────────────────────────────────────────────────
   app.get("/healthz", (c) =>
-    c.json({ status: "ok", providers: [...providers.keys()].sort() }),
+    c.json({
+      status: "ok",
+      providers: [...getDeps().providers.keys()].sort(),
+    }),
   );
 
   // ── /openapi.json + /docs ─────────────────────────────────────────────────
   // Regenerated per request so the X-Provider enum always reflects what is
   // actually loaded — the spec is the one honest description of this instance.
-  app.get("/openapi.json", (c) => c.json(buildOpenApi([...providers.keys()])));
+  app.get("/openapi.json", (c) => {
+    const d = getDeps();
+    return c.json(buildOpenApi([...d.providers.keys()], d.status?.version));
+  });
 
   app.get("/docs", (c) => c.html(SWAGGER_UI_HTML));
 
   // ── /providers ────────────────────────────────────────────────────────────
   app.get("/providers", (c) =>
     c.json({
-      providers: [...providers.values()].map((p) => ({
+      providers: [...getDeps().providers.values()].map((p) => ({
         name: p.name,
         base_url: p.baseUrl,
       })),
     }),
   );
 
+  // ── /dashboard + /api/overview ────────────────────────────────────────────
+  // Read-only status, no secret values (see status.ts). Served without a host
+  // policy match like the other management routes, so the operator can see
+  // WHY their agent is being denied. OUTPOST_DASHBOARD=false removes both.
+  const dashboardEnabled = (): boolean => getDeps().dashboard !== false;
+
+  app.get("/api/overview", async (c) => {
+    if (!dashboardEnabled()) {
+      return errorResponse(404, CODES.NO_ROUTE, "Dashboard is disabled");
+    }
+    const d = getDeps();
+    const resolveIp = d.resolveClientIp ?? clientIpFromHeaders;
+    const overview = await buildOverview(
+      { ...d, resolveClientIp: resolveIp },
+      c,
+      d.status,
+    );
+    return c.json(overview, 200, { "cache-control": "no-store" });
+  });
+
+  const dashboardPage = (c: Context): Response => {
+    if (!dashboardEnabled()) {
+      return errorResponse(404, CODES.NO_ROUTE, "Dashboard is disabled");
+    }
+    return c.html(DASHBOARD_HTML);
+  };
+  app.get("/dashboard", dashboardPage);
+  app.get("/dashboard/", dashboardPage);
+
   // ── catch-all proxy ───────────────────────────────────────────────────────
   app.all("*", async (c) => {
+    // One snapshot per request: a reload mid-flight must not mix old and new.
+    const current = getDeps();
+    const { providers, hosts, rateLimits, cache, defaultProvider } = current;
+    const resolveClientIp = current.resolveClientIp ?? clientIpFromHeaders;
+
     const req = c.req.raw;
     const method = req.method;
     const url = new URL(req.url);
     const fullPath = url.pathname;
 
-    // ── 1. Resolve provider ──────────────────────────────────────────────────
     const providerHeader = req.headers.get("x-provider");
     const brokerHeader = req.headers.get("x-broker");
+
+    // ── 0. Bare `GET /` from a browser → dashboard ───────────────────────────
+    // An agent never sends an empty path (it 404s below), so the only thing
+    // that lands here is a human who typed the address into a browser.
+    if (
+      method === "GET" &&
+      fullPath === "/" &&
+      !providerHeader &&
+      !brokerHeader &&
+      dashboardEnabled()
+    ) {
+      return c.redirect("/dashboard", 302);
+    }
+
+    // ── 1. Resolve provider ──────────────────────────────────────────────────
 
     let providerName: string;
     if (providerHeader) {

@@ -17,7 +17,7 @@ import upstoxYaml from "../../builtin_providers/upstox.yaml";
 import hostsYaml from "../../hosts.yaml";
 
 import { buildAppDeps } from "../bootstrap.ts";
-import { envFromWorkers } from "../core/env.ts";
+import { envFlag, envFromWorkers } from "../core/env.ts";
 import { buildApp } from "../index.ts";
 import type { AppDeps } from "../index.ts";
 import { loadProvidersFromYamls } from "../providers/loader.ts";
@@ -58,7 +58,7 @@ async function bootstrap(workerEnv: WorkerEnv): Promise<AppDeps> {
     { name: "openai.yaml", content: openaiYaml },
   ]);
 
-  return buildAppDeps({
+  const deps = await buildAppDeps({
     env,
     defs,
     hostsYaml,
@@ -66,6 +66,25 @@ async function bootstrap(workerEnv: WorkerEnv): Promise<AppDeps> {
     cache,
     rateLimits,
   });
+
+  return {
+    ...deps,
+    // A Worker is internet-facing, so the status page (which lists the host
+    // policy and credential env var names) is opt-in here: set the
+    // OUTPOST_DASHBOARD var to "true". On Node it defaults on.
+    dashboard:
+      typeof workerEnv["OUTPOST_DASHBOARD"] === "string" &&
+      envFlag(workerEnv["OUTPOST_DASHBOARD"]),
+    status: {
+      version: env.VERSION,
+      runtime: "workers",
+      startedAt: Date.now(),
+      credentialSet: (name) => {
+        const v = workerEnv[name];
+        return typeof v === "string" && v.length > 0;
+      },
+    },
+  };
 }
 
 export default {

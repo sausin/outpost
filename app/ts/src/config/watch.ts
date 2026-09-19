@@ -1,0 +1,165 @@
+/**
+ * Config file watcher (Node only) — the equivalent of Traefik's
+ * `--providers.file.watch=true`.
+ *
+ * Watches the providers directory and the directory holding hosts.yaml and
+ * fires `onChange` once per burst of edits. Two detection mechanisms feed the
+ * same debounce, because neither is enough alone:
+ *
+ *   - `fs.watch` (inotify): instant, and works for a bind-mounted dataset
+ *     edited on the host or over SMB/NFS via the host — the kernel is shared.
+ *     It cannot see writes that happen on another machine's kernel (a volume
+ *     served over NFS *into* the container), and it can be unavailable.
+ *   - A slow poll of mtimes/sizes: catches everything inotify misses, at the
+ *     cost of latency. Cheap — one readdir and a handful of stats.
+ *
+ * Reloads are serialised: a change that arrives while `onChange` is running
+ * queues exactly one more run, so a burst of saves never overlaps reloads.
+ */
+
+import { watch as fsWatch } from "node:fs";
+import type { FSWatcher } from "node:fs";
+import { readdir, stat } from "node:fs/promises";
+import path from "node:path";
+
+export interface WatchOptions {
+  /** Directory scanned for provider YAMLs. */
+  providersDir: string;
+  /** The hosts.yaml path. Its parent directory is what gets watched. */
+  hostsFile: string;
+  onChange: () => Promise<void> | void;
+  /** Quiet period after the last event before `onChange` runs. */
+  debounceMs?: number;
+  /** Interval of the mtime poll fallback; 0 disables it. */
+  pollMs?: number;
+  log?: (msg: string) => void;
+}
+
+export interface ConfigWatcher {
+  close(): void;
+  /** Force a change notification (same path as a real event; debounced). */
+  trigger(): void;
+}
+
+/**
+ * Fingerprint of everything a reload would read: hosts.yaml and every YAML in
+ * the providers dir, by mtime and size. Missing files are part of the
+ * fingerprint too (deleting example.yaml is a change).
+ */
+export async function configFingerprint(
+  providersDir: string,
+  hostsFile: string,
+): Promise<string> {
+  const parts: string[] = [];
+  const describe = async (file: string): Promise<string> => {
+    try {
+      const s = await stat(file);
+      return `${file}:${s.mtimeMs}:${s.size}`;
+    } catch {
+      return `${file}:missing`;
+    }
+  };
+  parts.push(await describe(hostsFile));
+  try {
+    const entries = (await readdir(providersDir))
+      .filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+      .sort();
+    for (const f of entries) {
+      parts.push(await describe(path.join(providersDir, f)));
+    }
+  } catch {
+    parts.push(`${providersDir}:missing`);
+  }
+  return parts.join("\n");
+}
+
+export function watchConfig(opts: WatchOptions): ConfigWatcher {
+  const debounceMs = opts.debounceMs ?? 500;
+  const pollMs = opts.pollMs ?? 15_000;
+  const log = opts.log ?? ((msg: string) => console.info(`[watch] ${msg}`));
+
+  let closed = false;
+  let debounce: NodeJS.Timeout | null = null;
+  let running = false;
+  let pending = false;
+
+  const run = async (): Promise<void> => {
+    if (running) {
+      pending = true;
+      return;
+    }
+    running = true;
+    try {
+      await opts.onChange();
+    } catch (err) {
+      log(`reload handler threw: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      running = false;
+      if (pending && !closed) {
+        pending = false;
+        void run();
+      }
+    }
+  };
+
+  const trigger = (): void => {
+    if (closed) return;
+    if (debounce) clearTimeout(debounce);
+    debounce = setTimeout(() => {
+      debounce = null;
+      void run();
+    }, debounceMs);
+    debounce.unref();
+  };
+
+  // ── inotify ───────────────────────────────────────────────────────────────
+  const watchers: FSWatcher[] = [];
+  const dirs = new Set([
+    path.resolve(opts.providersDir),
+    path.resolve(path.dirname(opts.hostsFile)),
+  ]);
+  for (const dir of dirs) {
+    try {
+      const w = fsWatch(dir, { persistent: false }, () => trigger());
+      w.on("error", (err) => log(`fs.watch on ${dir} failed: ${err.message}`));
+      watchers.push(w);
+    } catch (err) {
+      log(
+        `fs.watch unavailable for ${dir} (${err instanceof Error ? err.message : err}) — relying on polling`,
+      );
+    }
+  }
+
+  // ── poll fallback ─────────────────────────────────────────────────────────
+  let poll: NodeJS.Timeout | null = null;
+  if (pollMs > 0) {
+    let last: string | null = null;
+    const tick = async (): Promise<void> => {
+      if (closed) return;
+      try {
+        const fp = await configFingerprint(opts.providersDir, opts.hostsFile);
+        if (last !== null && fp !== last) trigger();
+        last = fp;
+      } catch {
+        // stat errors are already folded into the fingerprint; nothing to do.
+      }
+    };
+    void tick();
+    poll = setInterval(() => void tick(), pollMs);
+    poll.unref();
+  }
+
+  log(
+    `watching ${[...dirs].join(", ")} (debounce ${debounceMs} ms, poll ${pollMs > 0 ? `${pollMs} ms` : "off"})`,
+  );
+
+  return {
+    trigger,
+    close(): void {
+      closed = true;
+      if (debounce) clearTimeout(debounce);
+      if (poll) clearInterval(poll);
+      for (const w of watchers) w.close();
+    },
+  };
+}

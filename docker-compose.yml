@@ -52,9 +52,15 @@ services:
     ports: ["8080:8080"]
     volumes:
       # Both config locations are mounted read-only from the host repo. Edit
-      # them on disk and `docker compose restart proxy` — no image rebuild.
+      # them on disk — the TypeScript image reloads on change; the Python image
+      # needs `docker compose restart proxy`. No image rebuild either way.
       # Without these mounts the TypeScript image seeds /config with a starter
       # hosts.yaml and a disabled example provider on first boot instead.
+      #
+      # hosts.yaml is a single-file bind mount: editors that save by writing a
+      # new file and renaming it over the old one leave the container looking
+      # at the old inode, so the change is not seen until a restart. Save in
+      # place, or mount the directory instead, if you rely on live reload.
       - ./hosts.yaml:/config/hosts.yaml:ro
       - ./app/builtin_providers:/config/providers:ro
       # Optional: drop additional custom provider YAMLs (loaded on top of the

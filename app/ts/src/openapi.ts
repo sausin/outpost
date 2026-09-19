@@ -5,7 +5,7 @@
  * catch-all forwarder, the management routes, and the error envelope.
  * Registered providers show up as an enum on the X-Provider parameter, so the
  * Swagger page at /docs doubles as a live view of what this instance can talk
- * to. This is the only browser-facing page Outpost serves.
+ * to. The other browser-facing page is the status dashboard (status.ts).
  */
 
 const PROXY_METHODS = ["get", "post", "put", "delete", "patch"] as const;
@@ -57,7 +57,10 @@ function proxyOperation(method: string): Record<string, unknown> {
   return op;
 }
 
-export function buildOpenApi(providerNames: string[] = []): object {
+export function buildOpenApi(
+  providerNames: string[] = [],
+  version: string = "dev",
+): object {
   const providerEnum = [...providerNames].sort();
 
   const xProvider: Record<string, unknown> = {
@@ -79,7 +82,7 @@ export function buildOpenApi(providerNames: string[] = []): object {
     openapi: "3.1.0",
     info: {
       title: "Outpost — The edge sidecar for AI agents",
-      version: "0.1.0",
+      version,
       description:
         "Outpost transparently forwards HTTP requests from AI agents to upstream " +
         "REST APIs, injecting auth credentials, enforcing rate limits, caching responses, " +
@@ -245,6 +248,35 @@ export function buildOpenApi(providerNames: string[] = []): object {
           tags: ["management"],
           summary: "Swagger UI",
           responses: { "200": { description: "HTML page" } },
+        },
+      },
+      "/dashboard": {
+        get: {
+          tags: ["management"],
+          summary: "Status dashboard",
+          description:
+            "Read-only view of the loaded providers, host policy, config " +
+            "problems and storage health. Never shows a credential value. " +
+            "Disabled when `OUTPOST_DASHBOARD=false`.",
+          responses: {
+            "200": { description: "HTML page" },
+            "404": { description: "Dashboard disabled" },
+          },
+        },
+      },
+      "/api/overview": {
+        get: {
+          tags: ["management"],
+          summary: "Status overview (JSON behind the dashboard)",
+          description:
+            "Everything /dashboard renders: providers with their auth type " +
+            "and credential env var names (set/unset only), the host policy, " +
+            "what this request's source address resolves to, config load " +
+            "problems, and storage health. Contains no secret values.",
+          responses: {
+            "200": { description: "Overview document" },
+            "404": { description: "Dashboard disabled" },
+          },
         },
       },
       "/{path}": Object.fromEntries(

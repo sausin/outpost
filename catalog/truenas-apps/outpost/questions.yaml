@@ -13,12 +13,35 @@ groups:
     description: Configure Resources for Outpost
 
 questions:
+  - variable: TZ
+    group: Outpost Configuration
+    label: Timezone
+    schema:
+      type: string
+      default: Etc/UTC
+      required: true
+      $ref:
+        - definitions/timezone
   - variable: outpost
     label: ""
     group: Outpost Configuration
     schema:
       type: dict
       attrs:
+        - variable: dashboard
+          label: Dashboard
+          description: |
+            Enable the status dashboard at <code>/dashboard</code> (the portal link).</br>
+            It shows which providers loaded, the host access policy, whether each
+            credential environment variable is set, configuration errors, and the
+            address Outpost sees <i>your</i> browser as — the quickest way to find
+            out why an agent is getting a 403.</br>
+            It never displays a credential value. It does list host CIDRs and the
+            <i>names</i> of credential variables, so disable it if this port is
+            reachable from a network you do not trust.
+          schema:
+            type: boolean
+            default: true
         - variable: redis_password
           label: Redis Password
           description: |
@@ -102,7 +125,8 @@ questions:
           label: Web Port
           description: |
             The port Outpost listens on. Agents send their API calls here, and
-            the portal link opens the Swagger UI on the same port.
+            the portal link opens the dashboard on the same port
+            (<code>/dashboard</code>; the API docs are at <code>/docs</code>).
           schema:
             type: dict
             attrs:
@@ -257,6 +281,9 @@ questions:
           description: |
             Holds <code>hosts.yaml</code> (which agents may call the proxy) and
             <code>providers/</code> (one YAML per upstream API).</br>
+            Any <code>*.yaml</code> placed in <code>providers/</code> is picked up
+            as a provider definition. Outpost reloads the configuration whenever a
+            file changes — no restart needed.</br>
             On first boot Outpost writes a commented starter <code>hosts.yaml</code>
             and a disabled example provider here.
           schema:

@@ -38,6 +38,7 @@ npm run format:check    # prettier --check src/
 src/
 ├── index.ts              # shared Hono app (Workers + Node mount this)
 ├── openapi.ts            # OpenAPI 3.1 spec + Swagger UI shell served at /docs
+├── status.ts             # /dashboard page + /api/overview JSON (no secret values)
 ├── healthcheck.ts        # standalone container healthcheck entrypoint
 ├── adapter/
 │   ├── workers.ts        # Cloudflare Workers fetch handler
@@ -51,7 +52,8 @@ src/
 │   │                     #   CF-Connecting-IP honoured only from OUTPOST_TRUSTED_PROXIES
 │   └── env.ts            # env abstraction (process.env / Workers bindings)
 ├── config/
-│   └── seed.ts           # first-boot starter hosts.yaml + example provider
+│   ├── seed.ts           # first-boot starter hosts.yaml + example provider
+│   └── watch.ts          # live reload: inotify + mtime poll over providers/ and hosts.yaml
 ├── providers/
 │   ├── schema.ts         # zod schemas (mirrors app/providers/schema.py)
 │   ├── loader.ts         # STUB: scan/load YAML providers
