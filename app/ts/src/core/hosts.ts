@@ -3,10 +3,11 @@
  * longest-prefix CIDR match — mirrors app/core/hosts.py
  */
 
-// Default import on purpose: ipaddr.js ships a CommonJS build that assigns its
-// API onto a single object.  When the Node bundle externalises it, a namespace
-// import (`import * as ipaddr`) only exposes `default`, so `ipaddr.parseCIDR`
-// was undefined at runtime, every CIDR was "invalid", and every request 403'd.
+// Default import, NOT `import * as`: ipaddr.js is CommonJS, so under real ESM
+// (the bundled Node build) the namespace object has only a `default` key and
+// every named access is undefined — which silently turned every CIDR in
+// hosts.yaml into "invalid" and 403'd all traffic. Vitest's CJS interop hides
+// the difference, so the unit tests passed either way.
 import ipaddr from "ipaddr.js";
 import yaml from "js-yaml";
 import type { AppEnv } from "./env.ts";

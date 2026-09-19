@@ -5,9 +5,9 @@
  * provider sources.
  */
 
+import type { Context } from "hono";
+
 import { resolve as resolveAuth } from "./auth/registry.ts";
-import { ClientIpResolver } from "./core/client_ip.ts";
-import { parseTrustedProxies } from "./core/env.ts";
 import type { AppEnv } from "./core/env.ts";
 import { loadHostsFromYaml } from "./core/hosts.ts";
 import type { AppDeps } from "./index.ts";
@@ -26,6 +26,8 @@ export interface BootstrapInput {
   tokenStorage: Storage;
   cache: CacheBackend;
   rateLimits: RateLimitBackend;
+  /** Adapter-specific source-address resolution; see AppDeps.resolveClientIp. */
+  resolveClientIp?: (c: Context) => string | undefined;
 }
 
 /**
@@ -58,20 +60,12 @@ export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
 
   const hosts = loadHostsFromYaml(input.hostsYaml, input.env);
 
-  const trustedProxies = parseTrustedProxies(input.env.TRUSTED_PROXIES);
-  const clientIp = new ClientIpResolver(trustedProxies);
-  if (trustedProxies.length > 0) {
-    console.info(
-      `[bootstrap] Trusting forwarding headers from: ${trustedProxies.join(", ")}`,
-    );
-  }
-
   return {
     providers: built,
     hosts,
-    clientIp,
     rateLimits: input.rateLimits,
     cache: input.cache,
     defaultProvider: input.env.DEFAULT_PROVIDER,
+    resolveClientIp: input.resolveClientIp,
   };
 }

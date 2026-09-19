@@ -1,6 +1,10 @@
 import { describe, test, expect, beforeEach, afterEach, vi } from "vitest";
+import type { Context } from "hono";
 import { buildApp } from "../../src/index.ts";
 import { buildAppDeps } from "../../src/bootstrap.ts";
+import { makeNodeClientIpResolver } from "../../src/core/client_ip.ts";
+import { envFromWorkers } from "../../src/core/env.ts";
+import type { AppEnv } from "../../src/core/env.ts";
 import { ProviderSchema } from "../../src/providers/schema.ts";
 import { InMemoryStorage } from "../helpers/in_memory_storage.ts";
 import type {
@@ -73,22 +77,26 @@ function fakeRateLimits(
 }
 
 /**
- * Test-side stand-in for the runtime peer hook.  Real adapters read the TCP
- * socket (Node) or CF-Connecting-IP (Workers); here the peer comes from the
+ * Test-side stand-in for the Node adapter's socket-address source.  The real
+ * adapter reads the TCP socket via getConnInfo; here the peer comes from the
  * Hono env passed as the third argument to `app.request()`, defaulting to
  * loopback so the common path needs no ceremony:
- *   app.request(r)                            → peer 127.0.0.1
+ *   app.request(r)                              → peer 127.0.0.1
  *   app.request(r, undefined, peer("10.9.9.9")) → peer 10.9.9.9
+ * The resolver itself is the real one from core/client_ip.ts.
  */
 interface TestEnv {
   peer?: string;
 }
 const DEFAULT_PEER = "127.0.0.1";
-function testPeerAddress(env: unknown): string | undefined {
-  return (env as TestEnv | undefined)?.peer ?? DEFAULT_PEER;
+function testSocketAddress(c: Context): string | undefined {
+  return (c.env as TestEnv | undefined)?.peer ?? DEFAULT_PEER;
 }
 function peer(ip: string): TestEnv {
   return { peer: ip };
+}
+function testResolveClientIp(env: AppEnv) {
+  return makeNodeClientIpResolver({ env, socketAddress: testSocketAddress });
 }
 
 async function makeApp(
@@ -99,23 +107,20 @@ async function makeApp(
     extraEnv?: Record<string, string>;
   } = {},
 ) {
+  const env = envFromWorkers({
+    STRIPE_KEY: "sk_test_abc",
+    ...(opts.extraEnv ?? {}),
+  });
   const deps = await buildAppDeps({
-    env: {
-      DEFAULT_PROVIDER: "",
-      PROVIDERS_DIR: "",
-      HOSTS_CONFIG_PATH: "",
-      PROXY_PORT: "",
-      LOG_LEVEL: "",
-      STRIPE_KEY: "sk_test_abc",
-      ...(opts.extraEnv ?? {}),
-    },
+    env,
     defs: new Map([["stripe", STRIPE_DEF]]),
     hostsYaml: opts.hostsYaml ?? HOSTS_YAML,
     tokenStorage: new InMemoryStorage(),
     cache: fakeCache(opts.cacheStore),
     rateLimits: opts.rateLimits ?? fakeRateLimits(),
+    resolveClientIp: testResolveClientIp(env),
   });
-  return buildApp(deps, { peerAddress: testPeerAddress });
+  return buildApp(deps);
 }
 
 function req(
@@ -240,33 +245,6 @@ hosts:
     expect(res.status).toBe(200);
   });
 
-  test("request with no determinable peer is denied", async () => {
-    const deps = await buildAppDeps({
-      env: {
-        DEFAULT_PROVIDER: "",
-        PROVIDERS_DIR: "",
-        HOSTS_CONFIG_PATH: "",
-        PROXY_PORT: "",
-        LOG_LEVEL: "",
-        STRIPE_KEY: "sk_test_abc",
-      },
-      defs: new Map([["stripe", STRIPE_DEF]]),
-      hostsYaml: HOSTS_YAML,
-      tokenStorage: new InMemoryStorage(),
-      cache: fakeCache(),
-      rateLimits: fakeRateLimits(),
-    });
-    // No peerAddress hook at all → resolver has nothing authoritative to go on.
-    const app = buildApp(deps);
-    const r = req("/v1/charges", {
-      headers: { "x-provider": "stripe", "x-forwarded-for": "127.0.0.1" },
-    });
-    const res = await app.request(r);
-    expect(res.status).toBe(403);
-    const body = (await res.json()) as { error: { code: string } };
-    expect(body.error.code).toBe("PROXY_HOST_DENIED");
-  });
-
   test("allowlist miss returns 404 PROXY_NO_ROUTE", async () => {
     const app = await makeApp();
     const r = req("/v1/unknown", {
@@ -279,15 +257,10 @@ hosts:
   });
 
   test("sensitive path + non-sensitive host returns 403 PROXY_SENSITIVE_DENIED", async () => {
+    const env = envFromWorkers({ STRIPE_KEY: "sk_test" });
     const depsInput = {
-      env: {
-        DEFAULT_PROVIDER: "",
-        PROVIDERS_DIR: "",
-        HOSTS_CONFIG_PATH: "",
-        PROXY_PORT: "",
-        LOG_LEVEL: "",
-        STRIPE_KEY: "sk_test",
-      },
+      env,
+      resolveClientIp: testResolveClientIp(env),
       defs: new Map([["stripe", STRIPE_DEF]]),
       hostsYaml: `
 hosts:
@@ -301,7 +274,7 @@ hosts:
     };
     const { buildAppDeps: bap } = await import("../../src/bootstrap.ts");
     const deps = await bap(depsInput);
-    const app = buildApp(deps, { peerAddress: testPeerAddress });
+    const app = buildApp(deps);
 
     const r = new Request("http://proxy/v1/charges", {
       method: "POST",
@@ -405,14 +378,10 @@ hosts:
       },
     });
 
+    const env = envFromWorkers({});
     const depsInput = {
-      env: {
-        DEFAULT_PROVIDER: "",
-        PROVIDERS_DIR: "",
-        HOSTS_CONFIG_PATH: "",
-        PROXY_PORT: "",
-        LOG_LEVEL: "",
-      },
+      env,
+      resolveClientIp: testResolveClientIp(env),
       defs: new Map([["brex", redisDef]]),
       hostsYaml: HOSTS_YAML,
       tokenStorage: storage,
@@ -421,7 +390,7 @@ hosts:
     };
     const { buildAppDeps: bap } = await import("../../src/bootstrap.ts");
     const appDeps = await bap(depsInput);
-    const app = buildApp(appDeps, { peerAddress: testPeerAddress });
+    const app = buildApp(appDeps);
 
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ error: "Unauthorized" }), {

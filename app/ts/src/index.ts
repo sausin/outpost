@@ -8,8 +8,8 @@
  */
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 
-import type { ClientIpResolver, PeerAddressHook } from "./core/client_ip.ts";
 import { CODES, errorResponse } from "./core/errors.ts";
 import type { HostResolver } from "./core/hosts.ts";
 import {
@@ -19,6 +19,7 @@ import {
   queryHash,
 } from "./core/cache_keys.ts";
 import type { AuthContext } from "./core/types.ts";
+import { buildOpenApi, SWAGGER_UI_HTML } from "./openapi.ts";
 import type { GenericProvider } from "./providers/provider.ts";
 import type { RateLimitBackend, CacheBackend } from "./storage/interface.ts";
 import { RateLimitedError } from "./storage/interface.ts";
@@ -80,29 +81,39 @@ function base64ToBytes(b64: string): Uint8Array {
 export interface AppDeps {
   providers: Map<string, GenericProvider>;
   hosts: HostResolver;
-  /** Decides which address `hosts` is matched against (peer vs trusted-proxy headers). */
-  clientIp: ClientIpResolver;
   rateLimits: RateLimitBackend;
   cache: CacheBackend;
   defaultProvider: string;
+  /**
+   * How to determine the caller's source address, which `hosts.yaml` is matched
+   * against. Supplied by the adapter because only it knows what can be trusted:
+   * on Workers the edge sets `CF-Connecting-IP` and it cannot be forged; on
+   * Node, forwarding headers are attacker-controlled unless a reverse proxy is
+   * declared, so the socket peer is used instead.
+   */
+  resolveClientIp?: (c: Context) => string | undefined;
 }
 
 /**
- * Runtime-specific hooks.  Each adapter supplies how to obtain the transport
- * peer for a request; the shared app never reads spoofable headers directly.
+ * Header-only fallback used when no adapter resolver is supplied. Sound on
+ * Workers; on Node it needs a trusted proxy in front, which is why the Node
+ * adapter passes its own.
  */
-export interface RuntimeHooks {
-  /** Returns the transport-level peer address, or undefined if unavailable. */
-  peerAddress?: PeerAddressHook;
+export function clientIpFromHeaders(c: Context): string | undefined {
+  const headers = c.req.raw.headers;
+  return (
+    headers.get("cf-connecting-ip") ??
+    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    undefined
+  );
 }
 
 /** Log warning once per X-Broker usage to nudge callers to migrate. */
 const _brokerWarnedProviders = new Set<string>();
 
-export function buildApp(deps: AppDeps, hooks: RuntimeHooks = {}): Hono {
-  const { providers, hosts, clientIp, rateLimits, cache, defaultProvider } =
-    deps;
-  const { peerAddress } = hooks;
+export function buildApp(deps: AppDeps): Hono {
+  const { providers, hosts, rateLimits, cache, defaultProvider } = deps;
+  const resolveClientIp = deps.resolveClientIp ?? clientIpFromHeaders;
 
   const app = new Hono();
 
@@ -110,6 +121,13 @@ export function buildApp(deps: AppDeps, hooks: RuntimeHooks = {}): Hono {
   app.get("/healthz", (c) =>
     c.json({ status: "ok", providers: [...providers.keys()].sort() }),
   );
+
+  // ── /openapi.json + /docs ─────────────────────────────────────────────────
+  // Regenerated per request so the X-Provider enum always reflects what is
+  // actually loaded — the spec is the one honest description of this instance.
+  app.get("/openapi.json", (c) => c.json(buildOpenApi([...providers.keys()])));
+
+  app.get("/docs", (c) => c.html(SWAGGER_UI_HTML));
 
   // ── /providers ────────────────────────────────────────────────────────────
   app.get("/providers", (c) =>
@@ -160,18 +178,7 @@ export function buildApp(deps: AppDeps, hooks: RuntimeHooks = {}): Hono {
     const provider = providers.get(providerName)!;
 
     // ── 2. Client IP ─────────────────────────────────────────────────────────
-    // The transport peer (socket on Node, CF edge view on Workers) is
-    // authoritative.  X-Forwarded-For / CF-Connecting-IP / X-Real-IP are
-    // honoured only when the peer is in TRUSTED_PROXIES — see core/client_ip.ts.
-    const peer = peerAddress ? peerAddress(c.env, req) : undefined;
-    const ip = clientIp.resolve({ peer, headers: req.headers });
-    if (ip === null) {
-      return errorResponse(
-        403,
-        CODES.HOST_DENIED,
-        "Source IP could not be determined",
-      );
-    }
+    const ip = resolveClientIp(c) ?? "unknown";
 
     // ── 3. Host policy ───────────────────────────────────────────────────────
     const policy = hosts.resolve(ip);

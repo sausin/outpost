@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/icon.svg" alt="" width="128" height="128">
+</p>
+
 # Outpost
 
 **Outpost — a capability-based credential proxy for AI agents.** Never hand raw keys to Claude, Cursor, or Aider again. Enforce what an agent can *actually do* with a few lines of YAML.
@@ -379,7 +383,7 @@ The same YAML works on both runtimes. Python and TypeScript read the identical s
 
 | Control | How it works |
 |---|---|
-| **Source-IP allowlist** | `hosts.yaml` — CIDR-mapped policies; unknown IPs get 403. The connection's peer address is what gets matched; `X-Forwarded-For` / `CF-Connecting-IP` are only believed when the peer is listed in `TRUSTED_PROXIES`, so a direct caller cannot spoof its identity |
+| **Source-IP allowlist** | `hosts.yaml` — CIDR-mapped policies; unknown IPs get 403. The connection's peer address is what gets matched; `X-Forwarded-For` / `CF-Connecting-IP` are only believed when the peer is listed in `OUTPOST_TRUSTED_PROXIES`, so a direct caller cannot spoof its identity |
 | **Per-host pre-shared key** | Set `auth_token_env` in `hosts.yaml`; agents send `X-Outpost-Auth: <token>`; mismatch returns 401. Constant-time compare. Omit for trusted networks like localhost. The PSK is stripped before forwarding — it never reaches the upstream API |
 | **Sensitive endpoint gate** | Only hosts with `can_call_sensitive: true` may call sensitive endpoints. Writes (POST/PUT/DELETE/PATCH) are flagged sensitive automatically in transparent mode |
 | **Path deny list** | `forwarding.deny: [...]` — checked before allow rules |
@@ -392,7 +396,7 @@ The same YAML works on both runtimes. Python and TypeScript read the identical s
 ### Defense-in-depth for internet-facing deploys
 
 1. **TLS at the edge** — `make install` in Public mode wires up Caddy + Let's Encrypt automatically.
-2. **Tighten `TRUSTED_PROXIES`** to your Caddy/load-balancer CIDR.
+2. **Set `OUTPOST_TRUSTED_PROXIES`** to your Caddy/load-balancer CIDR. Forwarding headers are only believed from those addresses.
 3. **Set `auth_token_env`** on every host except `localhost-dev`. Generate with `openssl rand -hex 32`. Rotate by changing one env var.
 4. **`can_call_sensitive: true`** only for hosts that genuinely place writes or trades.
 5. **Allowlist mode** in production provider YAMLs — transparent mode is for dev and experiments.

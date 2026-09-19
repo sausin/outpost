@@ -1,6 +1,20 @@
 import { describe, test, expect, vi } from "vitest";
-import { ClientIpResolver, normalizeIp } from "../../src/core/client_ip.ts";
-import { parseTrustedProxies } from "../../src/core/env.ts";
+import type { Context } from "hono";
+
+import {
+  ClientIpResolver,
+  makeNodeClientIpResolver,
+  normalizeIp,
+  trustsProxyHeaders,
+} from "../../src/core/client_ip.ts";
+import { envFromWorkers, parseTrustedProxies } from "../../src/core/env.ts";
+
+/** Minimal Context stand-in — the resolver only reads request headers. */
+function ctx(headers: Record<string, string> = {}): Context {
+  return {
+    req: { raw: new Request("http://proxy.local/v1/x", { headers }) },
+  } as unknown as Context;
+}
 
 function input(
   peer: string | null | undefined,
@@ -10,12 +24,14 @@ function input(
 }
 
 describe("normalizeIp", () => {
-  test("plain IPv4 passes through", () => {
-    expect(normalizeIp("192.168.50.199")).toBe("192.168.50.199");
+  test("unwraps IPv4-mapped IPv6", () => {
+    expect(normalizeIp("::ffff:192.168.1.10")).toBe("192.168.1.10");
+    expect(normalizeIp("::FFFF:10.0.0.1")).toBe("10.0.0.1");
   });
 
-  test("IPv4-mapped IPv6 collapses to IPv4", () => {
-    expect(normalizeIp("::ffff:192.168.50.199")).toBe("192.168.50.199");
+  test("leaves real addresses alone", () => {
+    expect(normalizeIp("10.0.0.1")).toBe("10.0.0.1");
+    expect(normalizeIp("::1")).toBe("::1");
   });
 
   test("IPv6 is canonicalised", () => {
@@ -44,6 +60,34 @@ describe("normalizeIp", () => {
     expect(normalizeIp("   ")).toBeNull();
     expect(normalizeIp(null)).toBeNull();
     expect(normalizeIp(undefined)).toBeNull();
+  });
+});
+
+describe("trustsProxyHeaders", () => {
+  test("off unless a proxy is declared", () => {
+    expect(trustsProxyHeaders(envFromWorkers({}))).toBe(false);
+    expect(trustsProxyHeaders(envFromWorkers({ TRUSTED_PROXIES: "  " }))).toBe(false); // prettier-ignore
+  });
+
+  test("on for either variable name", () => {
+    expect(trustsProxyHeaders(envFromWorkers({ TRUSTED_PROXIES: "10.0.0.0/8" }))).toBe(true); // prettier-ignore
+    expect(trustsProxyHeaders(envFromWorkers({ OUTPOST_TRUSTED_PROXIES: "10.0.0.0/8" }))).toBe(true); // prettier-ignore
+  });
+});
+
+describe("parseTrustedProxies", () => {
+  test("splits on commas and trims", () => {
+    expect(parseTrustedProxies(" 127.0.0.1, 10.0.0.0/8 ,, ::1 ")).toEqual([
+      "127.0.0.1",
+      "10.0.0.0/8",
+      "::1",
+    ]);
+  });
+
+  test("empty / missing yields an empty list", () => {
+    expect(parseTrustedProxies("")).toEqual([]);
+    expect(parseTrustedProxies(undefined)).toEqual([]);
+    expect(parseTrustedProxies(null)).toEqual([]);
   });
 });
 
@@ -102,6 +146,7 @@ describe("ClientIpResolver — spoofed headers from untrusted peers are ignored"
   });
 
   test("trusted list configured, but peer outside it → still the peer", () => {
+    // A caller that bypasses the declared reverse proxy cannot borrow its trust.
     const r = new ClientIpResolver(["10.0.0.0/8"]);
     expect(
       r.resolve(input("192.168.1.50", { "x-forwarded-for": "127.0.0.1" })),
@@ -213,18 +258,72 @@ describe("ClientIpResolver — trusted proxies", () => {
   });
 });
 
-describe("parseTrustedProxies", () => {
-  test("splits on commas and trims", () => {
-    expect(parseTrustedProxies(" 127.0.0.1, 10.0.0.0/8 ,, ::1 ")).toEqual([
-      "127.0.0.1",
-      "10.0.0.0/8",
-      "::1",
-    ]);
+describe("Node client-IP resolution (adapter hook)", () => {
+  test("uses the socket peer when no proxy is declared", () => {
+    const resolve = makeNodeClientIpResolver({
+      env: envFromWorkers({}),
+      socketAddress: () => "172.18.0.4",
+    });
+    expect(resolve(ctx())).toBe("172.18.0.4");
   });
 
-  test("empty / missing yields an empty list", () => {
-    expect(parseTrustedProxies("")).toEqual([]);
-    expect(parseTrustedProxies(undefined)).toEqual([]);
-    expect(parseTrustedProxies(null)).toEqual([]);
+  test("ignores X-Forwarded-For when no proxy is declared", () => {
+    // Without this, any caller could claim the loopback policy — which is the
+    // most privileged entry in the shipped hosts.yaml — with one header.
+    const resolve = makeNodeClientIpResolver({
+      env: envFromWorkers({}),
+      socketAddress: () => "172.18.0.4",
+    });
+    expect(resolve(ctx({ "x-forwarded-for": "127.0.0.1" }))).toBe("172.18.0.4");
+  });
+
+  test("honours X-Forwarded-For once a proxy is declared and is the peer", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const resolve = makeNodeClientIpResolver({
+      env: envFromWorkers({ OUTPOST_TRUSTED_PROXIES: "172.18.0.0/16" }),
+      socketAddress: () => "172.18.0.4",
+    });
+    expect(resolve(ctx({ "x-forwarded-for": "203.0.113.9, 172.18.0.4" }))).toBe(
+      "203.0.113.9",
+    );
+    info.mockRestore();
+  });
+
+  test("ignores X-Forwarded-For when a proxy is declared but the peer is not it", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const resolve = makeNodeClientIpResolver({
+      env: envFromWorkers({ OUTPOST_TRUSTED_PROXIES: "172.18.0.0/16" }),
+      socketAddress: () => "192.168.50.199",
+    });
+    expect(resolve(ctx({ "x-forwarded-for": "127.0.0.1" }))).toBe(
+      "192.168.50.199",
+    );
+    info.mockRestore();
+  });
+
+  test("falls back to the socket peer when the trusted proxy sends no header", () => {
+    const info = vi.spyOn(console, "info").mockImplementation(() => {});
+    const resolve = makeNodeClientIpResolver({
+      env: envFromWorkers({ TRUSTED_PROXIES: "172.18.0.0/16" }),
+      socketAddress: () => "172.18.0.4",
+    });
+    expect(resolve(ctx())).toBe("172.18.0.4");
+    info.mockRestore();
+  });
+
+  test("normalizes an IPv4-mapped socket address", () => {
+    const resolve = makeNodeClientIpResolver({
+      env: envFromWorkers({}),
+      socketAddress: () => "::ffff:172.18.0.4",
+    });
+    expect(resolve(ctx())).toBe("172.18.0.4");
+  });
+
+  test("undefined when the peer address is unavailable", () => {
+    const resolve = makeNodeClientIpResolver({
+      env: envFromWorkers({}),
+      socketAddress: () => undefined,
+    });
+    expect(resolve(ctx())).toBeUndefined();
   });
 });
