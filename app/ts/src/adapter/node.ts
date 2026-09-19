@@ -8,6 +8,7 @@
 import { readFile } from "node:fs/promises";
 
 import { serve } from "@hono/node-server";
+import type { HttpBindings } from "@hono/node-server";
 
 import { buildAppDeps } from "../bootstrap.ts";
 import { envFromNode } from "../core/env.ts";
@@ -16,6 +17,18 @@ import { loadProvidersFromDir } from "../providers/loader.ts";
 import { RedisCache } from "../storage/cache_redis.ts";
 import { RedisRateLimit } from "../storage/rate_limit_redis.ts";
 import { createRedisClient, RedisStorage } from "../storage/redis.ts";
+
+/**
+ * Transport peer for the Node runtime: the TCP socket's remote address.
+ * @hono/node-server passes `{ incoming, outgoing }` as the Hono env, so the
+ * raw IncomingMessage (and its socket) is reachable from the shared app.
+ * Dual-stack listeners report IPv4 peers as `::ffff:a.b.c.d`; the client IP
+ * resolver normalises that before policy matching.
+ */
+function nodePeerAddress(env: unknown): string | undefined {
+  const incoming = (env as Partial<HttpBindings> | undefined)?.incoming;
+  return incoming?.socket?.remoteAddress ?? undefined;
+}
 
 async function main(): Promise<void> {
   const env = envFromNode();
@@ -46,7 +59,7 @@ async function main(): Promise<void> {
     rateLimits,
   });
 
-  const app = buildApp(deps);
+  const app = buildApp(deps, { peerAddress: nodePeerAddress });
   const port = Number(env.PROXY_PORT);
 
   serve({ fetch: app.fetch, port }, (info) => {

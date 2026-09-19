@@ -11,6 +11,12 @@ export interface AppEnv {
   HOSTS_CONFIG_PATH: string;
   PROXY_PORT: string;
   LOG_LEVEL: string;
+  /**
+   * Comma-separated IPs / CIDRs of reverse proxies whose forwarding headers
+   * (X-Forwarded-For, CF-Connecting-IP, X-Real-IP) may be trusted.  Empty =
+   * the socket peer is always the client.  Same semantics as the Python runtime.
+   */
+  TRUSTED_PROXIES?: string;
 
   // Workers: KV bindings; Node: undefined (Redis used instead in Phase 4)
   TOKENS?: KVNamespace;
@@ -28,6 +34,7 @@ export function envFromNode(): AppEnv {
     HOSTS_CONFIG_PATH: process.env["HOSTS_CONFIG_PATH"] ?? "./hosts.yaml",
     PROXY_PORT: process.env["PROXY_PORT"] ?? "8080",
     LOG_LEVEL: process.env["LOG_LEVEL"] ?? "info",
+    TRUSTED_PROXIES: process.env["TRUSTED_PROXIES"] ?? "",
     // Spread all process.env so provider credentials are accessible
     ...process.env,
   };
@@ -43,7 +50,20 @@ export function envFromWorkers(workerEnv: unknown): AppEnv {
       (e["HOSTS_CONFIG_PATH"] as string | undefined) ?? "./hosts.yaml",
     PROXY_PORT: (e["PROXY_PORT"] as string | undefined) ?? "8080",
     LOG_LEVEL: (e["LOG_LEVEL"] as string | undefined) ?? "info",
+    TRUSTED_PROXIES: (e["TRUSTED_PROXIES"] as string | undefined) ?? "",
     // Spread all bindings so KV namespaces + provider credentials are accessible
     ...e,
   };
+}
+
+/**
+ * Split TRUSTED_PROXIES into its entries.  Whitespace-tolerant; empty items
+ * dropped.  Validation of each IP / CIDR happens in ClientIpResolver.
+ */
+export function parseTrustedProxies(raw: string | undefined | null): string[] {
+  if (typeof raw !== "string") return [];
+  return raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter((s) => s.length > 0);
 }

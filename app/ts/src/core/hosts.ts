@@ -3,7 +3,11 @@
  * longest-prefix CIDR match — mirrors app/core/hosts.py
  */
 
-import * as ipaddr from "ipaddr.js";
+// Default import on purpose: ipaddr.js ships a CommonJS build that assigns its
+// API onto a single object.  When the Node bundle externalises it, a namespace
+// import (`import * as ipaddr`) only exposes `default`, so `ipaddr.parseCIDR`
+// was undefined at runtime, every CIDR was "invalid", and every request 403'd.
+import ipaddr from "ipaddr.js";
 import yaml from "js-yaml";
 import type { AppEnv } from "./env.ts";
 

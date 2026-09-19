@@ -9,6 +9,7 @@
 
 import { Hono } from "hono";
 
+import type { ClientIpResolver, PeerAddressHook } from "./core/client_ip.ts";
 import { CODES, errorResponse } from "./core/errors.ts";
 import type { HostResolver } from "./core/hosts.ts";
 import {
@@ -79,16 +80,29 @@ function base64ToBytes(b64: string): Uint8Array {
 export interface AppDeps {
   providers: Map<string, GenericProvider>;
   hosts: HostResolver;
+  /** Decides which address `hosts` is matched against (peer vs trusted-proxy headers). */
+  clientIp: ClientIpResolver;
   rateLimits: RateLimitBackend;
   cache: CacheBackend;
   defaultProvider: string;
 }
 
+/**
+ * Runtime-specific hooks.  Each adapter supplies how to obtain the transport
+ * peer for a request; the shared app never reads spoofable headers directly.
+ */
+export interface RuntimeHooks {
+  /** Returns the transport-level peer address, or undefined if unavailable. */
+  peerAddress?: PeerAddressHook;
+}
+
 /** Log warning once per X-Broker usage to nudge callers to migrate. */
 const _brokerWarnedProviders = new Set<string>();
 
-export function buildApp(deps: AppDeps): Hono {
-  const { providers, hosts, rateLimits, cache, defaultProvider } = deps;
+export function buildApp(deps: AppDeps, hooks: RuntimeHooks = {}): Hono {
+  const { providers, hosts, clientIp, rateLimits, cache, defaultProvider } =
+    deps;
+  const { peerAddress } = hooks;
 
   const app = new Hono();
 
@@ -146,12 +160,18 @@ export function buildApp(deps: AppDeps): Hono {
     const provider = providers.get(providerName)!;
 
     // ── 2. Client IP ─────────────────────────────────────────────────────────
-    // Workers: cf-connecting-ip is the real client IP set by the CF edge.
-    // Node behind a trusted proxy: first value from X-Forwarded-For.
-    const ip =
-      req.headers.get("cf-connecting-ip") ??
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      "unknown";
+    // The transport peer (socket on Node, CF edge view on Workers) is
+    // authoritative.  X-Forwarded-For / CF-Connecting-IP / X-Real-IP are
+    // honoured only when the peer is in TRUSTED_PROXIES — see core/client_ip.ts.
+    const peer = peerAddress ? peerAddress(c.env, req) : undefined;
+    const ip = clientIp.resolve({ peer, headers: req.headers });
+    if (ip === null) {
+      return errorResponse(
+        403,
+        CODES.HOST_DENIED,
+        "Source IP could not be determined",
+      );
+    }
 
     // ── 3. Host policy ───────────────────────────────────────────────────────
     const policy = hosts.resolve(ip);

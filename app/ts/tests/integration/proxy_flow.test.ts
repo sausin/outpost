@@ -72,6 +72,25 @@ function fakeRateLimits(
   };
 }
 
+/**
+ * Test-side stand-in for the runtime peer hook.  Real adapters read the TCP
+ * socket (Node) or CF-Connecting-IP (Workers); here the peer comes from the
+ * Hono env passed as the third argument to `app.request()`, defaulting to
+ * loopback so the common path needs no ceremony:
+ *   app.request(r)                            → peer 127.0.0.1
+ *   app.request(r, undefined, peer("10.9.9.9")) → peer 10.9.9.9
+ */
+interface TestEnv {
+  peer?: string;
+}
+const DEFAULT_PEER = "127.0.0.1";
+function testPeerAddress(env: unknown): string | undefined {
+  return (env as TestEnv | undefined)?.peer ?? DEFAULT_PEER;
+}
+function peer(ip: string): TestEnv {
+  return { peer: ip };
+}
+
 async function makeApp(
   opts: {
     hostsYaml?: string;
@@ -96,7 +115,7 @@ async function makeApp(
     cache: fakeCache(opts.cacheStore),
     rateLimits: opts.rateLimits ?? fakeRateLimits(),
   });
-  return buildApp(deps);
+  return buildApp(deps, { peerAddress: testPeerAddress });
 }
 
 function req(
@@ -108,10 +127,7 @@ function req(
 ): Request {
   return new Request(`http://proxy${path}`, {
     method: opts.method ?? "GET",
-    headers: {
-      "x-forwarded-for": "127.0.0.1",
-      ...opts.headers,
-    },
+    headers: opts.headers ?? {},
   });
 }
 
@@ -159,11 +175,91 @@ describe("integration: proxy_flow", () => {
 
   test("source IP not in hosts.yaml returns 403 PROXY_HOST_DENIED", async () => {
     const app = await makeApp();
-    const r = new Request("http://proxy/v1/charges", {
+    const r = req("/v1/charges", { headers: { "x-provider": "stripe" } });
+    // peer 10.99.99.99 is not in hosts.yaml
+    const res = await app.request(r, undefined, peer("10.99.99.99"));
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as { error: { code: string } };
+    expect(body.error.code).toBe("PROXY_HOST_DENIED");
+  });
+
+  test("spoofed X-Forwarded-For from an untrusted peer is ignored (still 403)", async () => {
+    const app = await makeApp();
+    const r = req("/v1/charges", {
       headers: {
         "x-provider": "stripe",
-        "x-forwarded-for": "10.99.99.99", // not in hosts.yaml
+        "x-forwarded-for": "127.0.0.1", // allowed IP, but the caller isn't a trusted proxy
+        "cf-connecting-ip": "127.0.0.1",
       },
+    });
+    const res = await app.request(r, undefined, peer("10.99.99.99"));
+    expect(res.status).toBe(403);
+    const body = (await res.json()) as {
+      error: { code: string; message: string };
+    };
+    expect(body.error.code).toBe("PROXY_HOST_DENIED");
+    expect(body.error.message).toContain("10.99.99.99");
+  });
+
+  test("X-Forwarded-For is honoured when the peer is in TRUSTED_PROXIES", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const app = await makeApp({ extraEnv: { TRUSTED_PROXIES: "10.0.0.0/8" } });
+    const r = req("/v1/charges", {
+      headers: {
+        "x-provider": "stripe",
+        "x-forwarded-for": "127.0.0.1", // real client, as reported by the proxy
+      },
+    });
+    const res = await app.request(r, undefined, peer("10.0.0.5"));
+    expect(res.status).toBe(200);
+  });
+
+  test("direct caller with no forwarding headers is identified by the socket peer", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const app = await makeApp({
+      hostsYaml: `
+hosts:
+  - id: lan
+    cidrs: ["192.168.50.0/24"]
+    can_call_sensitive: false
+`,
+    });
+    const r = req("/v1/charges", { headers: { "x-provider": "stripe" } });
+    // Node reports IPv4 peers on a dual-stack listener as ::ffff:a.b.c.d
+    const res = await app.request(r, undefined, peer("::ffff:192.168.50.199"));
+    expect(res.status).toBe(200);
+  });
+
+  test("request with no determinable peer is denied", async () => {
+    const deps = await buildAppDeps({
+      env: {
+        DEFAULT_PROVIDER: "",
+        PROVIDERS_DIR: "",
+        HOSTS_CONFIG_PATH: "",
+        PROXY_PORT: "",
+        LOG_LEVEL: "",
+        STRIPE_KEY: "sk_test_abc",
+      },
+      defs: new Map([["stripe", STRIPE_DEF]]),
+      hostsYaml: HOSTS_YAML,
+      tokenStorage: new InMemoryStorage(),
+      cache: fakeCache(),
+      rateLimits: fakeRateLimits(),
+    });
+    // No peerAddress hook at all → resolver has nothing authoritative to go on.
+    const app = buildApp(deps);
+    const r = req("/v1/charges", {
+      headers: { "x-provider": "stripe", "x-forwarded-for": "127.0.0.1" },
     });
     const res = await app.request(r);
     expect(res.status).toBe(403);
@@ -205,13 +301,12 @@ hosts:
     };
     const { buildAppDeps: bap } = await import("../../src/bootstrap.ts");
     const deps = await bap(depsInput);
-    const app = buildApp(deps);
+    const app = buildApp(deps, { peerAddress: testPeerAddress });
 
     const r = new Request("http://proxy/v1/charges", {
       method: "POST",
       headers: {
         "x-provider": "stripe",
-        "x-forwarded-for": "127.0.0.1",
         "content-type": "application/json",
       },
       body: JSON.stringify({ amount: 100 }),
@@ -326,7 +421,7 @@ hosts:
     };
     const { buildAppDeps: bap } = await import("../../src/bootstrap.ts");
     const appDeps = await bap(depsInput);
-    const app = buildApp(appDeps);
+    const app = buildApp(appDeps, { peerAddress: testPeerAddress });
 
     vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
       new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -336,10 +431,7 @@ hosts:
     );
 
     const r = new Request("http://proxy/v1/accounts", {
-      headers: {
-        "x-provider": "brex",
-        "x-forwarded-for": "127.0.0.1",
-      },
+      headers: { "x-provider": "brex" },
     });
     await app.request(r);
     expect(await storage.get("stripe:token")).toBeNull();

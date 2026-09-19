@@ -379,7 +379,7 @@ The same YAML works on both runtimes. Python and TypeScript read the identical s
 
 | Control | How it works |
 |---|---|
-| **Source-IP allowlist** | `hosts.yaml` — CIDR-mapped policies; unknown IPs get 403 |
+| **Source-IP allowlist** | `hosts.yaml` — CIDR-mapped policies; unknown IPs get 403. The connection's peer address is what gets matched; `X-Forwarded-For` / `CF-Connecting-IP` are only believed when the peer is listed in `TRUSTED_PROXIES`, so a direct caller cannot spoof its identity |
 | **Per-host pre-shared key** | Set `auth_token_env` in `hosts.yaml`; agents send `X-Outpost-Auth: <token>`; mismatch returns 401. Constant-time compare. Omit for trusted networks like localhost. The PSK is stripped before forwarding — it never reaches the upstream API |
 | **Sensitive endpoint gate** | Only hosts with `can_call_sensitive: true` may call sensitive endpoints. Writes (POST/PUT/DELETE/PATCH) are flagged sensitive automatically in transparent mode |
 | **Path deny list** | `forwarding.deny: [...]` — checked before allow rules |

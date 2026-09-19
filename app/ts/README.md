@@ -45,6 +45,8 @@ src/
 │   ├── errors.ts         # error envelope + CODES
 │   ├── pathmatch.ts      # glob → regex (mirrors app/core/pathmatch.py)
 │   ├── hosts.ts          # HostResolver + HostPolicy (mirrors app/core/hosts.py)
+│   ├── client_ip.ts      # client IP: socket peer is authoritative; X-Forwarded-For /
+│   │                     #   CF-Connecting-IP honoured only from TRUSTED_PROXIES
 │   └── env.ts            # env abstraction (process.env / Workers bindings)
 ├── providers/
 │   ├── schema.ts         # zod schemas (mirrors app/providers/schema.py)

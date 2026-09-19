@@ -68,6 +68,16 @@ async function bootstrap(workerEnv: WorkerEnv): Promise<AppDeps> {
   });
 }
 
+/**
+ * Transport peer for the Workers runtime.  Cloudflare's edge terminates the
+ * client connection and reports the caller in CF-Connecting-IP; a client
+ * cannot forge that header through Cloudflare, so it plays the role the TCP
+ * socket plays on Node.
+ */
+function workersPeerAddress(_env: unknown, request: Request): string | null {
+  return request.headers.get("cf-connecting-ip");
+}
+
 export default {
   async fetch(
     request: Request,
@@ -78,7 +88,7 @@ export default {
       depsPromise = bootstrap(workerEnv);
     }
     const deps = await depsPromise;
-    const app = buildApp(deps);
+    const app = buildApp(deps, { peerAddress: workersPeerAddress });
     return app.fetch(request, workerEnv, ctx);
   },
 };
