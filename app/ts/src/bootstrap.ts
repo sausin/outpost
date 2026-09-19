@@ -5,6 +5,8 @@
  * provider sources.
  */
 
+import type { Context } from "hono";
+
 import { resolve as resolveAuth } from "./auth/registry.ts";
 import type { AppEnv } from "./core/env.ts";
 import { loadHostsFromYaml } from "./core/hosts.ts";
@@ -24,6 +26,8 @@ export interface BootstrapInput {
   tokenStorage: Storage;
   cache: CacheBackend;
   rateLimits: RateLimitBackend;
+  /** Adapter-specific source-address resolution; see AppDeps.resolveClientIp. */
+  resolveClientIp?: (c: Context) => string | undefined;
 }
 
 /**
@@ -62,5 +66,6 @@ export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
     rateLimits: input.rateLimits,
     cache: input.cache,
     defaultProvider: input.env.DEFAULT_PROVIDER,
+    resolveClientIp: input.resolveClientIp,
   };
 }

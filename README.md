@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/assets/icon.svg" alt="" width="128" height="128">
+</p>
+
 # Outpost
 
 **Outpost — a capability-based credential proxy for AI agents.** Never hand raw keys to Claude, Cursor, or Aider again. Enforce what an agent can *actually do* with a few lines of YAML.

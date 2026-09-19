@@ -1,0 +1,60 @@
+{% set tpl = ix_lib.base.render.Render(values) %}
+
+{% set c1 = tpl.add_container(values.consts.outpost_container_name, "image") %}
+{% set perm_container = tpl.deps.perms(values.consts.perms_container_name) %}
+
+{# Outpost chowns nothing at startup and writes only to the config dataset and
+   /tmp, so any non-root uid:gid works. #}
+{% do c1.set_user(values.run_as.user, values.run_as.group) %}
+
+{# Redis holds minted tokens, rate-limit counters and cached upstream responses.
+   None of it needs to outlive the app, so it lives on its own volume. #}
+{% set redis_config = {
+  "password": values.outpost.redis_password,
+  "volume": {"type": "temporary", "volume_config": {"volume_name": "redis-data"}},
+} %}
+{% set redis = tpl.deps.redis(values.consts.redis_container_name, "redis_image", redis_config, perm_container) %}
+{% do c1.depends.add_dependency(values.consts.redis_container_name, "service_healthy") %}
+
+{# The image ships its own healthcheck entrypoint, so there is no dependency on
+   curl/wget being present in the runtime layer. #}
+{% do c1.healthcheck.set_test("node", {"port": values.network.web_port.port_number, "path": "/healthz"}) %}
+
+{% do c1.environment.add_env("OUTPOST_PORT", values.network.web_port.port_number) %}
+{% do c1.environment.add_env("OUTPOST_BIND_ADDRESS", "0.0.0.0") %}
+{% do c1.environment.add_env("OUTPOST_PROVIDERS_DIR", values.consts.config_path ~ "/providers") %}
+{% do c1.environment.add_env("OUTPOST_HOSTS_FILE", values.consts.config_path ~ "/hosts.yaml") %}
+{% do c1.environment.add_env("OUTPOST_DEFAULT_PROVIDER", values.outpost.default_provider) %}
+{% do c1.environment.add_env("REDIS_URL", redis.get_url("redis")) %}
+
+{# Provider credentials (GITHUB_TOKEN, STRIPE_SECRET_KEY, ...) arrive here. #}
+{% do c1.environment.add_user_envs(values.outpost.additional_envs) %}
+
+{% do c1.add_port(values.network.web_port) %}
+
+{% do c1.add_storage(values.consts.config_path, values.storage.config) %}
+{% for store in values.storage.additional_storage %}
+  {% do c1.add_storage(store.mount_path, store) %}
+{% endfor %}
+
+{% do perm_container.add_or_skip_action("config", values.storage.config, {"uid": values.run_as.user, "gid": values.run_as.group, "mode": "check"}) %}
+
+{% if perm_container.has_actions() %}
+  {% do perm_container.activate() %}
+  {% do c1.depends.add_dependency(values.consts.perms_container_name, "service_completed_successfully") %}
+  {% do redis.container.depends.add_dependency(values.consts.perms_container_name, "service_completed_successfully") %}
+{% endif %}
+
+{# Swagger UI is the only browser-facing page Outpost serves. #}
+{% do tpl.portals.add(values.network.web_port, {"path": "/docs"}) %}
+
+{# First-run guidance. Each add_info renders as one bullet, so keep them
+   single-line and let docs/TRUENAS.md carry the long form. #}
+{% do tpl.notes.add_info("**Add a provider**: drop a YAML file into `providers/` on the config dataset — `name`, `base_url` and an `auth` block naming an environment variable is enough. A commented `hosts.yaml` and a disabled `example.yaml` are written there on first boot.") %}
+{% do tpl.notes.add_info("**Set the credential**: edit this app and add the environment variable your provider names (e.g. `GITHUB_TOKEN`) under *Additional Environment Variables*. Credentials live only there — never on the config dataset, and never in front of your agents.") %}
+{% do tpl.notes.add_info("**Restart after editing**: provider YAMLs and `hosts.yaml` are read once at startup. `GET /providers` lists what loaded; the portal link opens the API docs.") %}
+{% do tpl.notes.add_info("**Point your agent at** `http://<truenas-ip>:%s` with an `X-Provider: <name>` header. Outpost injects the credential and forwards the call, so the agent never sees the secret."|format(values.network.web_port.port_number)) %}
+{% do tpl.notes.add_info("**Allow your agent's address**: the seeded `hosts.yaml` permits loopback only and everything else gets a 403. Outpost matches on the source address it actually sees — a LAN agent by its LAN address, a container on this host by the Docker bridge address, not 127.0.0.1.") %}
+{% do tpl.notes.add_info("**Before widening access**: give every non-loopback host an `auth_token_env` pre-shared key and prefer `forwarding.mode: allowlist` on its providers. See https://github.com/sausin/outpost/blob/main/docs/TRUENAS.md") %}
+
+{{ tpl.render() | tojson }}

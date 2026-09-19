@@ -8,6 +8,7 @@
  */
 
 import { Hono } from "hono";
+import type { Context } from "hono";
 
 import { CODES, errorResponse } from "./core/errors.ts";
 import type { HostResolver } from "./core/hosts.ts";
@@ -18,6 +19,7 @@ import {
   queryHash,
 } from "./core/cache_keys.ts";
 import type { AuthContext } from "./core/types.ts";
+import { buildOpenApi, SWAGGER_UI_HTML } from "./openapi.ts";
 import type { GenericProvider } from "./providers/provider.ts";
 import type { RateLimitBackend, CacheBackend } from "./storage/interface.ts";
 import { RateLimitedError } from "./storage/interface.ts";
@@ -82,6 +84,28 @@ export interface AppDeps {
   rateLimits: RateLimitBackend;
   cache: CacheBackend;
   defaultProvider: string;
+  /**
+   * How to determine the caller's source address, which `hosts.yaml` is matched
+   * against. Supplied by the adapter because only it knows what can be trusted:
+   * on Workers the edge sets `CF-Connecting-IP` and it cannot be forged; on
+   * Node, forwarding headers are attacker-controlled unless a reverse proxy is
+   * declared, so the socket peer is used instead.
+   */
+  resolveClientIp?: (c: Context) => string | undefined;
+}
+
+/**
+ * Header-only fallback used when no adapter resolver is supplied. Sound on
+ * Workers; on Node it needs a trusted proxy in front, which is why the Node
+ * adapter passes its own.
+ */
+export function clientIpFromHeaders(c: Context): string | undefined {
+  const headers = c.req.raw.headers;
+  return (
+    headers.get("cf-connecting-ip") ??
+    headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
+    undefined
+  );
 }
 
 /** Log warning once per X-Broker usage to nudge callers to migrate. */
@@ -89,6 +113,7 @@ const _brokerWarnedProviders = new Set<string>();
 
 export function buildApp(deps: AppDeps): Hono {
   const { providers, hosts, rateLimits, cache, defaultProvider } = deps;
+  const resolveClientIp = deps.resolveClientIp ?? clientIpFromHeaders;
 
   const app = new Hono();
 
@@ -96,6 +121,13 @@ export function buildApp(deps: AppDeps): Hono {
   app.get("/healthz", (c) =>
     c.json({ status: "ok", providers: [...providers.keys()].sort() }),
   );
+
+  // ── /openapi.json + /docs ─────────────────────────────────────────────────
+  // Regenerated per request so the X-Provider enum always reflects what is
+  // actually loaded — the spec is the one honest description of this instance.
+  app.get("/openapi.json", (c) => c.json(buildOpenApi([...providers.keys()])));
+
+  app.get("/docs", (c) => c.html(SWAGGER_UI_HTML));
 
   // ── /providers ────────────────────────────────────────────────────────────
   app.get("/providers", (c) =>
@@ -146,12 +178,7 @@ export function buildApp(deps: AppDeps): Hono {
     const provider = providers.get(providerName)!;
 
     // ── 2. Client IP ─────────────────────────────────────────────────────────
-    // Workers: cf-connecting-ip is the real client IP set by the CF edge.
-    // Node behind a trusted proxy: first value from X-Forwarded-For.
-    const ip =
-      req.headers.get("cf-connecting-ip") ??
-      req.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-      "unknown";
+    const ip = resolveClientIp(c) ?? "unknown";
 
     // ── 3. Host policy ───────────────────────────────────────────────────────
     const policy = hosts.resolve(ip);
