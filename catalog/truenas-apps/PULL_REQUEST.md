@@ -30,6 +30,13 @@ The app deploys two long-lived containers — the proxy and a sibling
 `valkey/valkey` used for token storage, rate limiting and response caching — plus
 the standard permissions container over a single config dataset.
 
+The shape follows the Traefik app: a `TZ` question, a **Dashboard** toggle, a
+config dataset that is watched so edits apply without a restart, credentials in
+**Additional Environment Variables**, and the portal opening the dashboard on
+the service port. The dashboard is a read-only status page (loaded providers,
+host policy, config errors, storage health, and the address the viewer arrives
+from) and never displays a credential value.
+
 ## App Information
 
 - **Upstream**: https://github.com/sausin/outpost
@@ -54,11 +61,14 @@ Verified on the rendered compose:
 - `/healthz` returns 200 with **zero** providers configured — the state of every
   fresh install before credentials are added — so the deploy does not fail while
   the user is still filling in the form.
-- Portal path `/docs` serves the API documentation page.
+- Portal path `/dashboard` serves the status page; `/` redirects to it; `/docs`
+  serves the API documentation.
 - First boot seeds `hosts.yaml` and a disabled `providers/example.yaml` into the
-  config dataset; adding a real provider YAML plus its credential env var and
-  restarting makes the provider live, and the upstream receives the injected
-  `Authorization` header while the caller sent none.
+  config dataset. Dropping a real provider YAML into the dataset is picked up
+  live (no restart) and appears on the dashboard; the upstream receives the
+  injected `Authorization` header while the caller sent none.
+- `/api/overview` (the dashboard's data) was checked against the credential
+  values set on the container: none appear in it.
 
 ## Icons and Screenshots
 
@@ -67,8 +77,8 @@ Please upload the following to the CDN:
 - Icon: attached (`icon-512.png`, 512×512 PNG). The `icon:` field in `app.yaml`
   currently holds the conventional placeholder URL — happy to update it to
   whatever URL you return.
-- Screenshots: none. Outpost's only browser-facing page is its API docs; it is
-  used by agents over HTTP, not by people in a browser.
+- Screenshot: attached (`dashboard.png`, the status dashboard). `screenshots:`
+  in `app.yaml` / `item.yaml` is empty until you return a URL.
 
 ## Special Notes
 
@@ -86,6 +96,14 @@ Please upload the following to the CDN:
 - **Healthcheck** uses the library's `node` variant, which runs the image's own
   Node binary — the runtime layer is deliberately slim and ships neither `curl`
   nor a full `wget`.
+- **Dashboard exposure.** Like Traefik's `api.insecure` default, the dashboard
+  is on by default and served without authentication on the service port. It
+  contains no secret values (credentials appear only as env var names with a
+  set/unset flag) but does list the host policy, so the form description tells
+  users to turn it off if the port is reachable from an untrusted network.
+- **Live reload** is always on in the app (`OUTPOST_CONFIG_WATCH=true`), matching
+  `--providers.file.watch=true` in the Traefik app. A file that fails to parse is
+  reported on the dashboard and the previous configuration stays in force.
 
 ## Checklist
 

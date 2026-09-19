@@ -144,11 +144,14 @@ jobs:
       # breaks, so it is worth a real boot rather than a file-layout check.
       - name: Boot as an arbitrary non-root UID (568:568)
         run: |
+          # A credential is set so the status page has something it must NOT
+          # show; the marker is grepped for below.
           docker run -d --name outpost-uid-test \
             -u 568:568 \
             --cap-drop ALL \
             --security-opt no-new-privileges \
             -p 18080:8080 \
+            -e EXAMPLE_API_KEY=SEKRIT-do-not-leak \
             outpost-ts:ci
 
           for i in $(seq 1 30); do
@@ -165,9 +168,37 @@ jobs:
           # state of every freshly installed app before credentials are set.
           curl -fsS http://127.0.0.1:18080/healthz | tee /dev/stderr | grep -q '"providers":\[\]'
 
-          # Swagger UI is the only browser-facing page; catalog portals link it.
+          # Browser-facing pages: the catalog portal opens /dashboard, and a
+          # bare / must land there too.
           curl -fsS -o /dev/null http://127.0.0.1:18080/docs
           curl -fsS -o /dev/null http://127.0.0.1:18080/openapi.json
+          curl -fsS -o /dev/null http://127.0.0.1:18080/dashboard
+          test "$(curl -s -o /dev/null -w '%{http_code} %{redirect_url}' http://127.0.0.1:18080/)" = "302 http://127.0.0.1:18080/dashboard"
+
+          # The status JSON must describe the instance without a secret value.
+          curl -fsS http://127.0.0.1:18080/api/overview | tee /tmp/overview.json | grep -q '"runtime":"node"'
+          if grep -q 'SEKRIT' /tmp/overview.json; then
+            echo "::error::/api/overview leaked a credential value"
+            exit 1
+          fi
+
+          # Live reload: enabling the seeded example provider on the config
+          # volume must show up without a restart (inotify inside the
+          # container, same path a TrueNAS dataset edit takes).
+          docker exec -u 568:568 outpost-uid-test sh -c \
+            "sed 's/^enabled: false/enabled: true/' /config/providers/example.yaml > /config/providers/github.yaml"
+          for i in $(seq 1 20); do
+            if curl -fsS http://127.0.0.1:18080/healthz | grep -q '"providers":\["example"\]'; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS http://127.0.0.1:18080/healthz | tee /dev/stderr | grep -q '"providers":\["example"\]'
+          curl -fsS http://127.0.0.1:18080/api/overview | tee /tmp/overview.json | grep -q '"env":"EXAMPLE_API_KEY","set":true'
+          if grep -q 'SEKRIT' /tmp/overview.json; then
+            echo "::error::/api/overview leaked a credential value after reload"
+            exit 1
+          fi
 
           # The container's own healthcheck mechanism, run as the same UID.
           docker exec -u 568:568 outpost-uid-test node dist/healthcheck.js

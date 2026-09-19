@@ -18,6 +18,21 @@ export interface HostPolicy {
   description?: string;
   /** Resolved PSK value (from the env var named in YAML), or undefined if no auth required. */
   authToken?: string;
+  /** Name of the env var the PSK came from — safe to display; the value never is. */
+  authTokenEnv?: string;
+}
+
+/**
+ * One `hosts:` entry as the status page shows it. Deliberately a separate
+ * shape from HostPolicy so the PSK value cannot end up in it by accident.
+ */
+export interface HostDescription {
+  id: string;
+  cidrs: string[];
+  canCallSensitive: boolean;
+  description?: string;
+  /** Env var naming the PSK, or null when the host needs none. */
+  authTokenEnv: string | null;
 }
 
 interface CidrEntry {
@@ -29,9 +44,28 @@ interface CidrEntry {
 
 export class HostResolver {
   private readonly entries: CidrEntry[];
+  private readonly descriptions: HostDescription[];
 
   constructor(entries: Array<{ cidr: string; policy: HostPolicy }>) {
     const parsed: CidrEntry[] = [];
+
+    // Group by policy object (one per hosts.yaml entry), in file order.
+    const byPolicy = new Map<HostPolicy, HostDescription>();
+    for (const { cidr, policy } of entries) {
+      let d = byPolicy.get(policy);
+      if (!d) {
+        d = {
+          id: policy.id,
+          cidrs: [],
+          canCallSensitive: policy.canCallSensitive,
+          description: policy.description,
+          authTokenEnv: policy.authTokenEnv ?? null,
+        };
+        byPolicy.set(policy, d);
+      }
+      d.cidrs.push(cidr);
+    }
+    this.descriptions = [...byPolicy.values()];
 
     for (const { cidr, policy } of entries) {
       try {
@@ -50,6 +84,11 @@ export class HostResolver {
     // Longer prefix first — /32 wins over /24
     parsed.sort((a, b) => b.prefixLen - a.prefixLen);
     this.entries = parsed;
+  }
+
+  /** Every host entry, in hosts.yaml order, with the PSK value omitted. */
+  describe(): HostDescription[] {
+    return this.descriptions.map((d) => ({ ...d, cidrs: [...d.cidrs] }));
   }
 
   resolve(ipStr: string): HostPolicy | null {
@@ -132,6 +171,7 @@ export function loadHostsFromYaml(yamlText: string, env: AppEnv): HostResolver {
       canCallSensitive: canSensitive,
       description: host.description,
       authToken,
+      authTokenEnv: tokenEnv || undefined,
     };
 
     for (const cidr of host.cidrs ?? []) {

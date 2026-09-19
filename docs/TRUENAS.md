@@ -2,7 +2,13 @@
 
 Outpost is available in the **community train** of the TrueNAS Apps catalog. This
 page covers what the app installs, how the installation form maps onto Outpost's
-configuration, and how to add providers once it is running.
+configuration, how to add providers once it is running, and the dashboard that
+shows you what it loaded.
+
+The packaging follows the catalog's Traefik app one for one: a single config
+dataset that is watched for changes, a dashboard on the same port as the
+service, credentials as environment variables, and a read-only status page that
+never shows a secret.
 
 If you are not on TrueNAS, see the [README](../README.md) — everything here also
 applies to any Docker host, the form fields are just environment variables and
@@ -39,6 +45,8 @@ config dataset before the app starts, and exits.
 
 | Form field                           | Effect                                                                                              |
 | ------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| **Timezone**                         | `TZ` in both containers. Only affects log timestamps.                                              |
+| **Dashboard**                        | `OUTPOST_DASHBOARD`. On by default; the portal link opens `/dashboard`. Off removes `/dashboard`, `/api/overview` and the redirect from `/`, and the portal opens `/docs` instead. |
 | **Redis Password**                   | Password for the sibling Redis. Outpost receives it as `REDIS_URL=redis://default:<password>@outpost-redis:6379`. |
 | **Default Provider**                 | `OUTPOST_DEFAULT_PROVIDER`. Optional — when set, requests without an `X-Provider` header use it.      |
 | **Additional Environment Variables** | Free-form `name`/`value` pairs. **This is where provider credentials go** (`GITHUB_TOKEN`, `STRIPE_SECRET_KEY`, …) and where you set the per-host PSKs referenced by `auth_token_env`. |
@@ -57,7 +65,7 @@ and writes nothing outside the config dataset and `/tmp`.
 
 | Form field    | Effect                                                                         |
 | ------------- | -------------------------------------------------------------------------------- |
-| **Web Port**  | Published host port, and `OUTPOST_PORT` inside the container. Default `30461`.    |
+| **Web Port**  | Published host port, and `OUTPOST_PORT` inside the container. Default `30461`. Agents call it; the portal opens the dashboard on it. |
 
 Outpost binds `0.0.0.0` inside the container (`OUTPOST_BIND_ADDRESS`).
 
@@ -80,6 +88,12 @@ On first boot with an empty dataset, Outpost writes a commented starter
 something to edit rather than an empty directory. Neither file is ever
 overwritten afterwards.
 
+**Edits apply live.** The app sets `OUTPOST_CONFIG_WATCH=true`, so both files
+are re-read whenever they change on the dataset — the same behaviour as the
+Traefik app's config directory. There is no restart step after adding a
+provider or widening `hosts.yaml`. Changes to *environment variables* (a new
+credential) still go through **Edit** on the app, which restarts it.
+
 ---
 
 ## Every environment variable
@@ -92,6 +106,9 @@ overwritten afterwards.
 | `OUTPOST_HOSTS_FILE`     | `/config/hosts.yaml` | Host access policy                                       |
 | `OUTPOST_DEFAULT_PROVIDER` | *(unset)*          | Provider used when the request carries no `X-Provider`   |
 | `OUTPOST_SEED_CONFIG`    | *(unset)*            | Set to `false` to disable first-boot config seeding      |
+| `OUTPOST_DASHBOARD`      | `true`               | Serve `/dashboard` and `/api/overview` (the app form's **Dashboard** toggle) |
+| `OUTPOST_CONFIG_WATCH`   | `true`               | Re-read `providers/` and `hosts.yaml` when they change on disk |
+| `OUTPOST_VERSION`        | *(baked into the image)* | Release version shown on the dashboard and in `/openapi.json` |
 | `REDIS_URL`              | `redis://localhost:6379/0` | Redis connection string                            |
 | `OUTPOST_TRUSTED_PROXIES` | *(unset)*           | Set when a reverse proxy fronts Outpost — see below      |
 | `OUTPOST_LOG_LEVEL`      | `info`               | Log verbosity                                            |
@@ -124,11 +141,15 @@ existing deployments keep working. When both are set, the `OUTPOST_*` name wins.
 3. **Set the credential.** In the TrueNAS UI: **Edit** the app → **Additional
    Environment Variables** → add `GITHUB_TOKEN` with your token as the value.
 
-4. **Restart the app.** Provider YAMLs are read once at startup.
+4. **Check it took.** Open the dashboard (the portal link). The provider
+   appears in the *Providers* table within a second or two of the file being
+   saved; its credential shows as a green `GITHUB_TOKEN` badge once the variable
+   is set. No restart is needed for the YAML — the environment variable in step
+   3 is the only thing that restarts the app.
 
-5. **Check it took.** The portal link opens Swagger UI at `/docs`; `GET
-   /providers` lists everything that loaded. A provider whose credential is
-   missing is logged and skipped — the proxy still starts with the rest.
+   A provider whose credential is missing shows up as *failed to load* with the
+   reason, and the proxy keeps running with the rest. `GET /providers` gives the
+   same list as JSON.
 
 Point your agent at `http://<truenas-ip>:<port>` and set `X-Provider: github` on
 its requests. The path is forwarded verbatim, so
@@ -137,6 +158,44 @@ its requests. The path is forwarded verbatim, so
 
 See the [README](../README.md) for the full provider schema: allowlist mode,
 per-route caching, rate-limit windows, OAuth2, HMAC signing and the rest.
+
+---
+
+## The dashboard
+
+![Outpost dashboard on TrueNAS](assets/dashboard.png)
+
+The portal link opens `/dashboard` — a single self-contained page on the
+service port, no external assets, so it works on a NAS with no internet access.
+It shows:
+
+- **Your connection** — the address Outpost sees *your browser* as, and which
+  `hosts.yaml` entry (if any) it matched. If it matched nothing, the card shows
+  the exact `hosts.yaml` lines that would allow it. This is the answer to
+  almost every "my agent gets a 403" question: open the dashboard from the
+  machine the agent runs on.
+- **Configuration** — the config paths, whether live reload is on, when the
+  files were last loaded and how many reloads have happened, and every problem
+  from the last load: a YAML that failed to parse (with the field and reason),
+  a provider whose credential variable is unset, a `hosts.yaml` naming a PSK
+  variable that is not set.
+- **Storage** — whether the sibling Redis answers, and how fast.
+- **Providers** — every loaded provider with its upstream, auth type,
+  credential variables (green = set, red = missing), forwarding mode, allow
+  and deny rule counts, and rate-limit windows. Disabled and failed providers
+  are listed too.
+- **Host policy** — every `hosts.yaml` entry with its CIDRs, whether it may
+  call sensitive endpoints, and whether it requires a pre-shared key.
+
+**What it never shows:** a credential value, a pre-shared key, or the Redis
+password. Credentials appear only as the *name* of the environment variable and
+a set/unset flag. The same data is available as JSON at `/api/overview`.
+
+It does list host CIDRs and those variable names, and like the other management
+routes it is served without a host-policy match (otherwise it could not tell
+you why you are being denied). On a home LAN that is the right trade; if the
+port is reachable from a network you do not trust, turn **Dashboard** off in
+the app form.
 
 ---
 
@@ -203,18 +262,34 @@ the config dataset.
 
 ## Troubleshooting
 
+**Start with the dashboard.** Nearly everything below is visible there without
+reading logs: failed providers and why, the last reload, storage health, and
+the address your own browser arrives from.
+
 **App deploys but shows unhealthy.** `/healthz` returns 200 as soon as the
 process is up, including with zero providers configured, so an unhealthy app
 means the process is not listening — check the container logs for a YAML parse
 error in `hosts.yaml`, or a missing env var named by a host's `auth_token_env`
-(that one is fatal by design).
+(that one is fatal *at startup* by design; the same mistake made while the app
+is running is reported on the dashboard and the previous policy stays in
+force).
 
-**Provider missing from `/providers`.** Either `enabled: false`, or its auth
-module failed to construct. The log line says which: `[bootstrap] Failed to
-build provider 'x': ...` — almost always an unset credential env var.
+**Provider missing from the dashboard / `/providers`.** Either `enabled: false`
+(listed under *Disabled*), or its auth module failed to construct (listed as
+*failed to load* with the reason — almost always an unset credential env var).
+The log line is `[bootstrap] Failed to build provider 'x': ...`.
+
+**Edited a file, nothing changed.** Check the dashboard's *Last loaded* time.
+If it did not move, the file may not have been saved where Outpost reads it
+(the paths are shown in *Configuration*), or the edit produced a parse error
+(shown under problems, and the previous configuration is kept). Live reload
+uses inotify with a mtime poll every 15 s as a fallback, so an edit over
+SMB/NFS is picked up within that window at worst.
 
 **Agent gets `403 PROXY_HOST_DENIED`.** Its source address does not match any
-CIDR in `hosts.yaml`; the error message names the address it saw. Remember that
+CIDR in `hosts.yaml`; the error message names the address it saw, and opening
+the dashboard from the agent's machine shows the same address in *Your
+connection* together with the `hosts.yaml` lines to allow it. Remember that
 this is the socket peer — a container on the same host arrives from the Docker
 bridge range, not from `127.0.0.1` — and that forwarding headers only count when
 the connection comes from an address listed in `OUTPOST_TRUSTED_PROXIES`.

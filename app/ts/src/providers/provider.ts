@@ -33,7 +33,8 @@ export class GenericProvider {
   private readonly allow: Array<{ rule: CompiledRule; meta: AllowMeta }>;
   private readonly deny: CompiledRule[];
   private readonly rateLimits: Record<string, WindowLimit[]>;
-  private readonly def: ProviderDef;
+  /** The validated definition this provider was built from (status page reads it). */
+  readonly def: ProviderDef;
 
   constructor(def: ProviderDef, auth: AuthModule) {
     this.def = def;

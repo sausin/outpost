@@ -97,11 +97,18 @@ RUN mkdir -p /config/providers && \
     chmod -R 0777 /config && \
     chmod -R a+rX /app /etc/outpost
 
+# Release version shown on /dashboard and in /openapi.json. The release
+# workflow passes the git tag; a local build says "dev".
+ARG OUTPOST_VERSION=dev
+
 ENV NODE_ENV=production \
+    OUTPOST_VERSION=${OUTPOST_VERSION} \
     OUTPOST_PORT=8080 \
     OUTPOST_BIND_ADDRESS=0.0.0.0 \
     OUTPOST_PROVIDERS_DIR=/config/providers \
-    OUTPOST_HOSTS_FILE=/config/hosts.yaml
+    OUTPOST_HOSTS_FILE=/config/hosts.yaml \
+    OUTPOST_DASHBOARD=true \
+    OUTPOST_CONFIG_WATCH=true
 
 USER 10001:10001
 EXPOSE 8080

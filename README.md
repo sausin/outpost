@@ -244,6 +244,10 @@ docker pull ghcr.io/sausin/outpost-python:latest   # Python runtime
 docker pull ghcr.io/sausin/outpost-ts:latest        # TypeScript runtime
 ```
 
+**TrueNAS SCALE:** Outpost is packaged for the TrueNAS Apps catalog (community
+train). Installation form, config dataset layout and the dashboard are covered
+in [`docs/TRUENAS.md`](docs/TRUENAS.md).
+
 Both multi-arch (`linux/amd64`, `linux/arm64`).
 
 > Manual install or hacking on the code? See [`docs/MANUAL.md`](docs/MANUAL.md).
@@ -602,6 +606,38 @@ Every step is observable via `X-Proxy-Cache`, `X-Proxy-Provider` response header
 | `GET /providers` | Registered providers with their base URLs |
 | `GET /openapi.json` | OpenAPI 3.1 spec, dynamically generated |
 | `GET /docs` | Swagger UI |
+| `GET /dashboard` | Status dashboard (TypeScript/Node runtime). `GET /` redirects here from a browser |
+| `GET /api/overview` | The JSON behind the dashboard (TypeScript/Node runtime) |
+
+### Status dashboard
+
+![Outpost dashboard](docs/assets/dashboard.png)
+
+The dashboard is a single self-contained page served on the proxy port — no
+build step, no CDN, works on an air-gapped box. It shows what this instance has
+actually loaded: each provider with its upstream, auth type, forwarding mode and
+rate limits; the host policy; the storage backend's health; configuration
+problems (a YAML that failed to parse, a provider whose credential is missing);
+and **which address Outpost sees your browser as** and what `hosts.yaml` makes of
+it — the fastest way to find out why an agent is getting a `403`.
+
+**It never shows a credential value.** Credentials appear only as the *name* of
+the environment variable and whether it is set; a host's pre-shared key appears
+only as the env var it is read from. It does list host CIDRs and those variable
+names, so on a port reachable from a network you do not trust set
+`OUTPOST_DASHBOARD=false`, which removes `/dashboard`, `/api/overview` and the
+redirect from `/`.
+
+### Live configuration reload
+
+On the Node runtime, `providers/*.yaml` and `hosts.yaml` are re-read whenever
+they change on disk (inotify, with a slow mtime poll as a fallback for mounts
+that do not deliver events), the same way Traefik's file provider watches its
+directory. Edit a file, and the next request uses it; the dashboard's *Last
+loaded* line and reload counter confirm it. A file that fails to parse, or a
+`hosts.yaml` naming a PSK env var that is unset, is reported as a problem and
+the previous configuration stays in force. Set `OUTPOST_CONFIG_WATCH=false` to
+go back to read-once-at-startup.
 
 ## Response Headers
 

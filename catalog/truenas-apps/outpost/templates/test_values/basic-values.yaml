@@ -3,7 +3,10 @@ resources:
     cpus: 2.0
     memory: 1024
 
+TZ: Etc/UTC
+
 outpost:
+  dashboard: true
   redis_password: outpost
   default_provider: ""
   additional_envs:

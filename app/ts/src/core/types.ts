@@ -36,3 +36,15 @@ export interface WindowLimit {
   capacity: number;
   windowMs: number;
 }
+
+/**
+ * A configuration issue surfaced on the status page: a provider YAML that did
+ * not parse, an auth module that could not be built, an unreadable hosts.yaml.
+ * Messages describe the problem and never carry a credential value.
+ */
+export interface ConfigProblem {
+  scope: "provider" | "hosts" | "config";
+  /** File or provider name the problem relates to, when known. */
+  source?: string;
+  message: string;
+}
