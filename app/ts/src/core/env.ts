@@ -15,6 +15,12 @@ export interface AppEnv {
   DEFAULT_PROVIDER: string;
   PROVIDERS_DIR: string;
   HOSTS_CONFIG_PATH: string;
+  /**
+   * Directory `type: plugin` auth modules are loaded from at runtime (Node
+   * only). A `module_ts: <file>:<Export>` that is not in the bundled registry
+   * is resolved against it. Missing directory = no runtime plugins.
+   */
+  PLUGINS_DIR: string;
   PROXY_PORT: string;
   BIND_ADDRESS: string;
   LOG_LEVEL: string;
@@ -70,6 +76,7 @@ function build(source: Record<string, unknown>): AppEnv {
     DEFAULT_PROVIDER: pick(source, ["OUTPOST_DEFAULT_PROVIDER", "DEFAULT_PROVIDER"], ""), // prettier-ignore
     PROVIDERS_DIR: pick(source, ["OUTPOST_PROVIDERS_DIR", "PROVIDERS_DIR"], "./builtin_providers"), // prettier-ignore
     HOSTS_CONFIG_PATH: pick(source, ["OUTPOST_HOSTS_FILE", "HOSTS_CONFIG_PATH"], "./hosts.yaml"), // prettier-ignore
+    PLUGINS_DIR: pick(source, ["OUTPOST_PLUGINS_DIR"], "./plugins"),
     PROXY_PORT: pick(source, ["OUTPOST_PORT", "PROXY_PORT"], "8080"),
     // 0.0.0.0 rather than localhost: inside a container the proxy must be
     // reachable from the outside, and sibling containers resolve us by name.

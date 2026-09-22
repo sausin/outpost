@@ -460,9 +460,9 @@ Outpost is HTTP-only. Upstox's market-data WebSocket and Groww's streaming feeds
 
 The Workers runtime uses KV-with-optimistic-refill for rate buckets (free tier). Under genuine contention this can over-permit by a few requests per window. If you need atomic multi-window precision on the Workers path, Cloudflare Paid + Durable Objects gets you there (roadmap item). For now, Docker + Redis is the correct choice for hard rate-limit guarantees.
 
-### 4. Plugin escape hatch is bundle-time on the TS runtime
+### 4. Plugin escape hatch is bundle-time on Cloudflare Workers
 
-Workers + bundled Node can't dynamic-import code at runtime. The TS runtime ships a static `PLUGIN_REGISTRY` listing every plugin the bundle knows about — adding a new plugin means editing that file and rebuilding/redeploying. Python's plugin model is fully dynamic (any importable class). Pick Python if you expect to add exotic auth plugins frequently.
+Workers can't dynamic-import code at runtime, so there the TS runtime only knows the plugins compiled into its static `PLUGIN_REGISTRY` — adding one means editing that file and redeploying. The Node image has no such limit: a `module_ts: <file>:<Export>` the registry doesn't know is imported from `OUTPOST_PLUGINS_DIR` (`/config/plugins` in the image) at runtime, and edits to it apply live. Python's plugin model is fully dynamic too (any importable class). Pick Python or the Node image if you expect to add exotic auth plugins; pick Workers only for schemes the built-ins cover.
 
 ### 5. No built-in approval workflows yet
 
@@ -664,16 +664,16 @@ uv run outpost add-provider
 
 Walks through basics, auth module selection (10 types), forwarding mode, rate limits, and headers. Previews the YAML with syntax highlighting and only writes after confirmation.
 
-**2. Write the YAML by hand** — any vendored provider is a template. For auth schemes not covered by the 10 built-ins, implement the `AuthModule` protocol in ~50 lines (Python or TypeScript) and reference it:
+**2. Write the YAML by hand** — any vendored provider is a template. For auth schemes not covered by the 10 built-ins, implement the `AuthModule` protocol in ~50 lines (Python or JavaScript) and reference it:
 
 ```yaml
 auth:
   type: plugin
-  module: my_pkg.my_mod:MyAuth             # Python runtime
-  module_ts: plugins/my_mod.ts:MyAuth      # TypeScript runtime (optional)
+  module: my_pkg.my_mod:MyAuth             # Python runtime: any importable class
+  module_ts: my_mod.mjs:MyAuth             # Node image: a file in OUTPOST_PLUGINS_DIR (/config/plugins)
 ```
 
-See [`docs/MANUAL.md`](docs/MANUAL.md) for the local dev workflow.
+On the Node image the module is a plain ESM file dropped into the plugins directory on the config volume — no rebuild, and edits apply live. A worked example (an HMAC-signing plugin, start to finish) is in [`docs/TRUENAS.md` → Custom auth schemes](docs/TRUENAS.md#custom-auth-schemes); it applies to any Docker deploy, not just TrueNAS. See [`docs/MANUAL.md`](docs/MANUAL.md) for the local dev workflow.
 
 ---
 
@@ -740,7 +740,7 @@ When adding things:
 
 - **New providers**: drop a YAML in `app/builtin_providers/` with `enabled: false` so users opt in; document the auth flow in a comment block at the top.
 - **New auth modules**: implement in both runtimes — `app/python/auth/modules/` and `app/ts/src/auth/modules/` — and register in each runtime's auth registry.
-- **New plugins**: same story, both `app/python/plugins/` and `app/ts/src/plugins/`; reference both paths via `module:` and `module_ts:`.
+- **New plugins**: same story, both `app/python/plugins/` and `app/ts/src/plugins/`; reference both paths via `module:` and `module_ts:`. (Bundled plugins also need an entry in `app/ts/src/plugins/registry.ts` so the Workers build knows them; a deploy-specific plugin can instead live in the plugins directory of the Node image and needs no registration.)
 
 See [`docs/MANUAL.md`](docs/MANUAL.md) for the local dev workflow.
 

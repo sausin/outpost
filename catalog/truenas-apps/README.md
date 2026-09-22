@@ -67,6 +67,7 @@ definition mirrors it deliberately:
 | Portal on the API/dashboard port              | Portal on the web port, path `/dashboard`                |
 | **Additional Environment Variables**          | Same field; it is also where credentials go              |
 | `additional_args` (Traefik CLI flags)         | Not needed — Outpost has no flag surface; env vars cover it |
+| Plugins via a rebuilt image                   | `plugins/` on the config dataset, imported at runtime (`OUTPOST_PLUGINS_DIR`) |
 | Docker socket + entry points                  | Not applicable                                           |
 
 ## Checking the template locally without their CI image

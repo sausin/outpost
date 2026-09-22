@@ -8,6 +8,7 @@
 import type { Context } from "hono";
 
 import { resolve as resolveAuth } from "./auth/registry.ts";
+import type { PluginLoader } from "./auth/types.ts";
 import type { AppEnv } from "./core/env.ts";
 import { loadHostsFromYaml } from "./core/hosts.ts";
 import type { ConfigProblem } from "./core/types.ts";
@@ -29,6 +30,8 @@ export interface BootstrapInput {
   rateLimits: RateLimitBackend;
   /** Adapter-specific source-address resolution; see AppDeps.resolveClientIp. */
   resolveClientIp?: (c: Context) => string | undefined;
+  /** Runtime loader for `type: plugin` modules outside the bundle (Node only). */
+  loadPlugin?: PluginLoader;
 }
 
 /**
@@ -52,6 +55,7 @@ export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
       const auth = await AuthClass.fromConfig(authConfig, {
         env: input.env,
         tokenStorage: input.tokenStorage,
+        loadPlugin: input.loadPlugin,
       });
       built.set(name, new GenericProvider(def, auth));
       console.info(`[bootstrap] Built provider '${name}'`);

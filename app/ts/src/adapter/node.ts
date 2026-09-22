@@ -31,6 +31,7 @@ import { envFlag, envFromNode, parseTrustedProxies } from "../core/env.ts";
 import type { ConfigProblem } from "../core/types.ts";
 import { buildApp } from "../index.ts";
 import type { AppDeps } from "../index.ts";
+import { makeFilePluginLoader } from "../plugins/file_loader.ts";
 import { loadProvidersFromDir } from "../providers/loader.ts";
 import type { StatusSource, StorageHealth } from "../status.ts";
 import { RedisCache } from "../storage/cache_redis.ts";
@@ -76,7 +77,12 @@ async function main(): Promise<void> {
   await seedConfig({
     providersDir: env.PROVIDERS_DIR,
     hostsFile: env.HOSTS_CONFIG_PATH,
+    pluginsDir: env.PLUGINS_DIR,
   });
+
+  // `type: plugin` references the bundle does not know are imported from the
+  // plugins directory at runtime — the escape hatch for the container image.
+  const loadPlugin = makeFilePluginLoader({ dir: env.PLUGINS_DIR });
 
   const resolveClientIp = makeNodeClientIpResolver({
     env,
@@ -116,6 +122,7 @@ async function main(): Promise<void> {
     config: {
       providersDir: env.PROVIDERS_DIR,
       hostsFile: env.HOSTS_CONFIG_PATH,
+      pluginsDir: env.PLUGINS_DIR,
       watch,
       reloads: 0,
       problems: [],
@@ -161,6 +168,7 @@ async function main(): Promise<void> {
       cache,
       rateLimits,
       resolveClientIp,
+      loadPlugin,
     });
     return { deps, problems, disabled: loaded.disabled };
   };
@@ -182,6 +190,7 @@ async function main(): Promise<void> {
     watchConfig({
       providersDir: env.PROVIDERS_DIR,
       hostsFile: env.HOSTS_CONFIG_PATH,
+      pluginsDir: env.PLUGINS_DIR,
       onChange: async () => {
         try {
           const loaded = await load();

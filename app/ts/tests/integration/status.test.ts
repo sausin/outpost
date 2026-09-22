@@ -88,6 +88,7 @@ async function depsWith(
     config: {
       providersDir: "/config/providers",
       hostsFile: "/config/hosts.yaml",
+      pluginsDir: "/config/plugins",
       watch: true,
       loadedAt: Date.now(),
       reloads: 2,

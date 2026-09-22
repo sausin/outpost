@@ -9,6 +9,9 @@
  *   <providers dir>/example.yaml   — a complete provider definition, DISABLED
  *   <hosts file>                   — a policy allowing localhost only
  *
+ * and create the (empty) plugins directory, so the place a custom auth module
+ * goes is visible when browsing the dataset.
+ *
  * Rules that keep this safe:
  *   - Never overwrite. A file that already exists is left strictly alone.
  *   - Never fail the boot. A read-only mount, a missing parent, a wrong owner
@@ -135,6 +138,8 @@ async function hasNoProviderYaml(dir: string): Promise<boolean> {
 export interface SeedTargets {
   providersDir: string;
   hostsFile: string;
+  /** Runtime plugins directory; created empty when given and absent. */
+  pluginsDir?: string;
 }
 
 /**
@@ -170,6 +175,16 @@ export async function seedConfig(targets: SeedTargets): Promise<string[]> {
     console.warn(
       `[seed] Could not seed example provider in ${targets.providersDir}: ${err}`,
     );
+  }
+
+  if (targets.pluginsDir) {
+    try {
+      await mkdir(targets.pluginsDir, { recursive: true });
+    } catch (err) {
+      console.warn(
+        `[seed] Could not create plugins directory ${targets.pluginsDir}: ${err}`,
+      );
+    }
   }
 
   if (created.length > 0) {

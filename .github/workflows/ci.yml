@@ -66,14 +66,9 @@ jobs:
         working-directory: app/ts
         run: npx prettier --check src/
 
-      - name: Vitest (when tests exist)
+      - name: Vitest
         working-directory: app/ts
-        run: |
-          if grep -q '"test"' package.json && [ -d src ] && find src -name "*.test.ts" -print -quit | grep -q .; then
-            npx vitest run
-          else
-            echo "No tests yet — skipping"
-          fi
+        run: npx vitest run
 
   docker-python:
     name: Python image — build (verification only)

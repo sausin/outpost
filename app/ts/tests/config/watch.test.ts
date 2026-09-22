@@ -71,6 +71,38 @@ describe("configFingerprint", () => {
     expect(await configFingerprint(providersDir, hostsFile)).not.toBe(d);
   });
 
+  test("covers plugin files in the plugins directory when one is given", async () => {
+    const pluginsDir = path.join(root, "plugins");
+    const a = await configFingerprint(providersDir, hostsFile, pluginsDir);
+    // No plugins directory yet: stable, not an error.
+    expect(await configFingerprint(providersDir, hostsFile, pluginsDir)).toBe(
+      a,
+    );
+
+    await mkdir(pluginsDir);
+    const b = await configFingerprint(providersDir, hostsFile, pluginsDir);
+    expect(b).not.toBe(a);
+
+    const file = path.join(pluginsDir, "my_auth.mjs");
+    await writeFile(file, "export class A {}\n");
+    const c = await configFingerprint(providersDir, hostsFile, pluginsDir);
+    expect(c).not.toBe(b);
+
+    await writeFile(file, "export class A { static fromConfig() {} }\n");
+    expect(await configFingerprint(providersDir, hostsFile, pluginsDir)).not.toBe(c); // prettier-ignore
+
+    // A stray non-code file in there is not a config change.
+    await writeFile(path.join(pluginsDir, "README.md"), "notes");
+    const d = await configFingerprint(providersDir, hostsFile, pluginsDir);
+    await unlink(path.join(pluginsDir, "README.md"));
+    expect(await configFingerprint(providersDir, hostsFile, pluginsDir)).toBe(
+      d,
+    );
+
+    // Without a plugins dir argument the same tree fingerprints as before.
+    expect(await configFingerprint(providersDir, hostsFile)).toBe(await configFingerprint(providersDir, hostsFile, undefined)); // prettier-ignore
+  });
+
   test("ignores non-YAML files in the providers directory", async () => {
     const a = await configFingerprint(providersDir, hostsFile);
     await writeFile(path.join(providersDir, "notes.txt"), "scratch");
@@ -86,6 +118,56 @@ describe("configFingerprint", () => {
 });
 
 describe("watchConfig", () => {
+  test("reloads when a plugin file changes in an existing plugins directory", async () => {
+    const pluginsDir = path.join(root, "plugins");
+    await mkdir(pluginsDir);
+    const r = reloads(1);
+    watchers.push(
+      watchConfig({
+        providersDir,
+        hostsFile,
+        pluginsDir,
+        onChange: r.onChange,
+        debounceMs: 100,
+        pollMs: 0,
+        log: () => {},
+      }),
+    );
+    await sleep(50);
+
+    await writeFile(
+      path.join(pluginsDir, "my_auth.mjs"),
+      "export class A {}\n",
+    );
+    await r.done;
+    expect(r.count).toBe(1);
+  });
+
+  test("a plugins directory created after start is caught by the poll", async () => {
+    const pluginsDir = path.join(root, "plugins");
+    const r = reloads(1);
+    watchers.push(
+      watchConfig({
+        providersDir,
+        hostsFile,
+        pluginsDir,
+        onChange: r.onChange,
+        debounceMs: 50,
+        pollMs: 100,
+        log: () => {},
+      }),
+    );
+    await sleep(150); // first poll tick records the baseline
+
+    await mkdir(pluginsDir);
+    await writeFile(
+      path.join(pluginsDir, "my_auth.mjs"),
+      "export class A {}\n",
+    );
+    await r.done;
+    expect(r.count).toBe(1);
+  });
+
   test("reloads once for a burst of edits to the providers directory", async () => {
     const r = reloads(1);
     watchers.push(

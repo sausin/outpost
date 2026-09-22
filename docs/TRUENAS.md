@@ -104,10 +104,11 @@ credential) still go through **Edit** on the app, which restarts it.
 | `OUTPOST_BIND_ADDRESS`   | `0.0.0.0`            | Listen address                                           |
 | `OUTPOST_PROVIDERS_DIR`  | `/config/providers`  | Directory scanned for `*.yaml` / `*.yml` provider defs   |
 | `OUTPOST_HOSTS_FILE`     | `/config/hosts.yaml` | Host access policy                                       |
+| `OUTPOST_PLUGINS_DIR`    | `/config/plugins`    | Directory custom auth modules (`type: plugin`) are imported from |
 | `OUTPOST_DEFAULT_PROVIDER` | *(unset)*          | Provider used when the request carries no `X-Provider`   |
 | `OUTPOST_SEED_CONFIG`    | *(unset)*            | Set to `false` to disable first-boot config seeding      |
 | `OUTPOST_DASHBOARD`      | `true`               | Serve `/dashboard` and `/api/overview` (the app form's **Dashboard** toggle) |
-| `OUTPOST_CONFIG_WATCH`   | `true`               | Re-read `providers/` and `hosts.yaml` when they change on disk |
+| `OUTPOST_CONFIG_WATCH`   | `true`               | Re-read `providers/`, `hosts.yaml` and `plugins/` when they change on disk |
 | `OUTPOST_VERSION`        | *(baked into the image)* | Release version shown on the dashboard and in `/openapi.json` |
 | `REDIS_URL`              | `redis://localhost:6379/0` | Redis connection string                            |
 | `OUTPOST_TRUSTED_PROXIES` | *(unset)*           | Set when a reverse proxy fronts Outpost — see below      |
@@ -158,6 +159,97 @@ its requests. The path is forwarded verbatim, so
 
 See the [README](../README.md) for the full provider schema: allowlist mode,
 per-route caching, rate-limit windows, OAuth2, HMAC signing and the rest.
+
+---
+
+## Custom auth schemes
+
+The ten built-in auth types cover most APIs: a static bearer token, an API key
+in a header or query parameter, HTTP basic, HMAC request signing, OAuth2
+client-credentials, a token kept in Redis, and `custom_headers` for anything
+that is "put these fixed headers on every request". Start there; a plugin is
+only needed when a credential has to be *computed* per request or *minted* from
+another call — a TOTP code, an AWS SigV4 signature, a vendor's own token
+exchange.
+
+For those, the image imports a JavaScript module from the config dataset at
+runtime. **No custom image and no rebuild.**
+
+1. **Write the module** as plain ESM into `plugins/` on the config dataset,
+   next to `providers/`. It exports a class with a static
+   `fromConfig(config, deps)` that returns an object with `apply`,
+   `invalidate` and `isRejection`. Nothing is imported from Outpost:
+
+   ```js
+   // /config/plugins/acme_signed.mjs
+   import { createHmac } from "node:crypto";
+
+   export class AcmeSignedAuth {
+     constructor(secret, keyId) { this.secret = secret; this.keyId = keyId; }
+
+     // config: the `config:` block of the provider YAML.
+     // deps.env: environment variables; deps.tokenStorage: Redis-backed
+     // get/set(key, value, ttlSeconds)/delete/pttl, for plugins that mint
+     // and cache a token.
+     static fromConfig(config, deps) {
+       const secret = deps.env[config.secret_env];
+       if (!secret) throw new Error(`${config.secret_env} is not set`);
+       return new AcmeSignedAuth(secret, deps.env[config.key_id_env]);
+     }
+
+     // ctx: { method, fullPath, queryString, body, headers }.
+     // Return `headers` to add; optionally `queryParams` to append.
+     async apply(ctx) {
+       const ts = Math.floor(Date.now() / 1000).toString();
+       const sig = createHmac("sha256", this.secret)
+         .update(`${ts}${ctx.method}${ctx.fullPath}`)
+         .digest("hex");
+       return { headers: { "X-Key-Id": this.keyId, "X-Timestamp": ts, "X-Signature": sig } };
+     }
+
+     // Called when isRejection() says the upstream refused the credential.
+     async invalidate() {}
+     isRejection(status) { return status === 401; }
+   }
+   ```
+
+2. **Reference it** from the provider YAML. The file part is relative to
+   `plugins/`; the part after the colon is the export name:
+
+   ```yaml
+   name: acme
+   base_url: https://api.acme.example
+   auth:
+     type: plugin
+     module_ts: acme_signed.mjs:AcmeSignedAuth
+     config:
+       secret_env: ACME_SECRET
+       key_id_env: ACME_KEY_ID
+   ```
+
+3. **Set the credentials** as environment variables on the app, exactly as for
+   a built-in auth type. The dashboard shows `ACME_SECRET` and `ACME_KEY_ID` as
+   badges (it finds every `*_env` key in the block) and never shows their
+   values.
+
+Both files are picked up live. Editing the module and saving it re-imports it
+on the next reload, so iterating on a plugin is save-and-retry, not
+save-restart-retry. A module that fails to import, exports the wrong name, or
+whose `fromConfig` throws, disables that one provider and puts the reason on
+the dashboard under *failed to load*; the other providers keep running.
+
+Rules the loader enforces: the path must stay inside `plugins/` (no `..`, no
+absolute paths), and the file must end in `.js`, `.mjs`, `.cjs` or `.ts`
+(`.ts` needs the type-stripping Node ships from 22.18 on, so `.mjs` is the safe
+choice). A plugin is code running with the proxy's own privileges and its
+environment, credentials included — treat the `plugins/` directory with the
+same care as the app's environment variables, and keep the dataset's
+permissions as the installer set them.
+
+This is specific to the Node image. The Python image takes the same idea in
+Python: a class on `sys.path` referenced by `module: my_pkg.my_mod:MyAuth`. A
+Cloudflare Workers deploy cannot import files at runtime, so there a plugin
+has to be registered in `app/ts/src/plugins/registry.ts` and redeployed.
 
 ---
 
@@ -278,6 +370,12 @@ force).
 (listed under *Disabled*), or its auth module failed to construct (listed as
 *failed to load* with the reason — almost always an unset credential env var).
 The log line is `[bootstrap] Failed to build provider 'x': ...`.
+
+**Provider with `type: plugin` shows *failed to load*.** The reason on the
+dashboard is specific: file not found in the plugins directory (check the path
+is relative to `plugins/`, extension included), export not found (the message
+lists what the file does export), `fromConfig()` threw (usually an unset env
+var), or a syntax error on import. Fix the file and save; no restart.
 
 **Edited a file, nothing changed.** Check the dashboard's *Last loaded* time.
 If it did not move, the file may not have been saved where Outpost reads it

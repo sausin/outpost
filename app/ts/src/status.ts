@@ -40,6 +40,8 @@ export interface StatusSource {
   config?: {
     providersDir?: string;
     hostsFile?: string;
+    /** Runtime plugins directory (Node only). */
+    pluginsDir?: string;
     /** Whether the config files are re-read when they change on disk. */
     watch?: boolean;
     /** Epoch ms of the last successful (re)load. */
@@ -105,6 +107,7 @@ export interface Overview {
   config: {
     providers_dir: string | null;
     hosts_file: string | null;
+    plugins_dir: string | null;
     watch: boolean | null;
     loaded_at: string | null;
     reloads: number;
@@ -246,6 +249,7 @@ export async function buildOverview(
     config: {
       providers_dir: cfg.providersDir ?? null,
       hosts_file: cfg.hostsFile ?? null,
+      plugins_dir: cfg.pluginsDir ?? null,
       watch: cfg.watch ?? null,
       loaded_at: iso(cfg.loadedAt),
       reloads: cfg.reloads ?? 0,
@@ -404,6 +408,7 @@ export const DASHBOARD_HTML = `<!doctype html>
     // Configuration
     var cfg = clear($("config"));
     [["Providers dir", o.config.providers_dir], ["Hosts file", o.config.hosts_file],
+     ["Plugins dir", o.config.plugins_dir],
      ["Default provider", o.default_provider || "(none — X-Provider required)"],
      ["Live reload", o.config.watch == null ? "—" : (o.config.watch ? "on — edits apply without a restart" : "off — restart after editing")],
      ["Last loaded", fmtTime(o.config.loaded_at) + (o.config.reloads ? " (" + o.config.reloads + " reload" + (o.config.reloads === 1 ? "" : "s") + ")" : "")]

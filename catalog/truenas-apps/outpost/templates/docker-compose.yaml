@@ -24,6 +24,9 @@
 {% do c1.environment.add_env("OUTPOST_BIND_ADDRESS", "0.0.0.0") %}
 {% do c1.environment.add_env("OUTPOST_PROVIDERS_DIR", values.consts.config_path ~ "/providers") %}
 {% do c1.environment.add_env("OUTPOST_HOSTS_FILE", values.consts.config_path ~ "/hosts.yaml") %}
+{# Auth schemes the image does not ship: a JavaScript module dropped in here
+   is imported at runtime, so no custom image is needed. #}
+{% do c1.environment.add_env("OUTPOST_PLUGINS_DIR", values.consts.config_path ~ "/plugins") %}
 {% do c1.environment.add_env("OUTPOST_DEFAULT_PROVIDER", values.outpost.default_provider) %}
 {% do c1.environment.add_env("OUTPOST_DASHBOARD", values.outpost.dashboard) %}
 {# Same idea as Traefik's --providers.file.watch: edits to the config dataset

@@ -1,5 +1,12 @@
 import { describe, test, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -38,6 +45,15 @@ describe("seedConfig", () => {
     expect(created).toEqual([t.hostsFile, path.join(t.providersDir, "example.yaml")]); // prettier-ignore
     expect(await readFile(t.hostsFile, "utf8")).toBe(STARTER_HOSTS_YAML);
     expect(await readFile(path.join(t.providersDir, "example.yaml"), "utf8")).toBe(EXAMPLE_PROVIDER_YAML); // prettier-ignore
+  });
+
+  test("creates the plugins directory when asked, without reporting it as a file", async () => {
+    const t = { ...targets(dir), pluginsDir: path.join(dir, "plugins") };
+    const created = await seedConfig(t);
+    expect(created).toEqual([t.hostsFile, path.join(t.providersDir, "example.yaml")]); // prettier-ignore
+    expect((await stat(t.pluginsDir)).isDirectory()).toBe(true);
+    // Second boot: still there, still nothing to report.
+    expect(await seedConfig(t)).toEqual([]);
   });
 
   test("never overwrites files the operator already wrote", async () => {

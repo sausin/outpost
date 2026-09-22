@@ -11,8 +11,13 @@ import type { AuthDeps, AuthModule } from "../types.ts";
  * `src/plugins/registry.ts`, and look up by the YAML's `module_ts:` (or
  * `module:` for Python-only YAMLs) string key.
  *
- * Adding a new plugin: drop the file in `src/plugins/`, import + register it
- * in `src/plugins/registry.ts`, then reference the registry key from YAML.
+ * Adding a bundled plugin: drop the file in `src/plugins/`, import + register
+ * it in `src/plugins/registry.ts`, then reference the registry key from YAML.
+ *
+ * On Node there is a second path: a reference the registry does not know is
+ * handed to `deps.loadPlugin` (src/plugins/file_loader.ts), which imports it
+ * from the plugins directory at runtime — no rebuild. Workers has no loader,
+ * so there the registry is the whole story.
  *
  * Config:
  *   module:    "<python-dotted-path>:Class"    (Python runtime reads this)
@@ -36,7 +41,16 @@ export class PluginAuth implements AuthModule {
       );
     }
 
-    const factory = PLUGIN_REGISTRY[moduleSpec];
+    let factory = PLUGIN_REGISTRY[moduleSpec];
+    if (!factory && deps.loadPlugin) {
+      try {
+        factory = await deps.loadPlugin(moduleSpec);
+      } catch (err) {
+        throw new Error(
+          `PluginAuth: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
     if (!factory) {
       throw new Error(
         `PluginAuth: unknown plugin '${moduleSpec}'. ` +
@@ -60,6 +74,17 @@ export class PluginAuth implements AuthModule {
       throw new Error(
         `PluginAuth: '${moduleSpec}'.fromConfig() failed: ${String(err)}`,
       );
+    }
+
+    // Mirrors Python's `isinstance(inner, AuthModule)` protocol check: a file
+    // plugin is untyped, so make sure it actually is an auth module before the
+    // first request finds out.
+    for (const method of ["apply", "invalidate", "isRejection"] as const) {
+      if (typeof (inner as Partial<AuthModule>)?.[method] !== "function") {
+        throw new Error(
+          `PluginAuth: '${moduleSpec}'.fromConfig() returned an object without ${method}(); an auth module needs apply(), invalidate() and isRejection().`,
+        );
+      }
     }
 
     return new PluginAuth(inner);

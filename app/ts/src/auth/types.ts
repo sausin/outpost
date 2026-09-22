@@ -20,10 +20,18 @@ export interface AuthModuleConstructor {
   readonly typeName: string;
 }
 
+/**
+ * Resolves a `module_ts:` reference that is not in the static PLUGIN_REGISTRY.
+ * Node supplies a file-based one (src/plugins/file_loader.ts); Workers has none.
+ */
+export type PluginLoader = (spec: string) => Promise<AuthModuleConstructor>;
+
 export interface AuthDeps {
   env: AppEnv;
   /** Token cache storage — used by bearer_redis and oauth2; stateless modules ignore it. */
   tokenStorage: Storage;
+  /** Runtime plugin loader for `type: plugin` references outside the bundle; optional. */
+  loadPlugin?: PluginLoader;
 }
 
 /**

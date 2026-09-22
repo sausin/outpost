@@ -93,7 +93,9 @@ COPY hosts.yaml /etc/outpost/hosts.yaml
 # known at build time and we refuse to chown at startup — on any real deploy a
 # volume is mounted over this and the host's permissions take over. Contents
 # are config the operator writes, never secrets (those are env vars).
-RUN mkdir -p /config/providers && \
+# /config/plugins holds runtime auth plugins (`type: plugin` modules imported
+# by path, no rebuild needed) — see docs/TRUENAS.md "Custom auth schemes".
+RUN mkdir -p /config/providers /config/plugins && \
     chmod -R 0777 /config && \
     chmod -R a+rX /app /etc/outpost
 
@@ -107,6 +109,7 @@ ENV NODE_ENV=production \
     OUTPOST_BIND_ADDRESS=0.0.0.0 \
     OUTPOST_PROVIDERS_DIR=/config/providers \
     OUTPOST_HOSTS_FILE=/config/hosts.yaml \
+    OUTPOST_PLUGINS_DIR=/config/plugins \
     OUTPOST_DASHBOARD=true \
     OUTPOST_CONFIG_WATCH=true
 
