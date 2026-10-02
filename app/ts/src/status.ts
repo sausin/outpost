@@ -48,10 +48,14 @@ export interface StatusSource {
     reloads?: number;
     /** Problems from the last load attempt, beyond those on AppDeps.problems. */
     problems?: ConfigProblem[];
+    /** Whether OUTPOST_HOSTS / OUTPOST_PROVIDERS are set. */
+    inline?: { hosts: boolean; providers: boolean };
   };
   trustedProxies?: string[];
   /** Providers on disk with `enabled: false`. */
   disabledProviders?: Array<{ name: string; source: string }>;
+  /** Provider name → where it was defined (file name or OUTPOST_PROVIDERS). */
+  providerSources?: Record<string, string>;
   /** Is this credential env var set (non-empty)? Never returns the value. */
   credentialSet?: (envName: string) => boolean;
   /** Probe the storage backend (Redis on Node, KV on Workers). */
@@ -67,6 +71,8 @@ export interface CredentialRef {
 
 export interface ProviderOverview {
   name: string;
+  /** File name or OUTPOST_PROVIDERS; null when unknown. */
+  source: string | null;
   base_url: string;
   description: string;
   docs_url: string;
@@ -94,6 +100,8 @@ export interface HostOverview {
   description: string | null;
   /** Env var holding the PSK, or null when the host needs none. */
   psk_env: string | null;
+  /** hosts.yaml path or OUTPOST_HOSTS; null when unknown. */
+  source: string | null;
 }
 
 export interface Overview {
@@ -109,6 +117,7 @@ export interface Overview {
     loaded_at: string | null;
     reloads: number;
     problems: ConfigProblem[];
+    inline: { hosts: boolean; providers: boolean } | null;
   };
   default_provider: string | null;
   trusted_proxies: string[];
@@ -157,11 +166,13 @@ export function credentialEnvNames(auth: Record<string, unknown>): string[] {
 export function describeProvider(
   p: GenericProvider,
   credentialSet?: (envName: string) => boolean,
+  source?: string,
 ): ProviderOverview {
   const def = p.def;
   const auth = def.auth as Record<string, unknown>;
   return {
     name: def.name,
+    source: source ?? null,
     base_url: def.base_url,
     description: def.description,
     docs_url: def.docs_url,
@@ -201,6 +212,7 @@ function describeHost(h: HostDescription): HostOverview {
     can_call_sensitive: h.canCallSensitive,
     description: h.description ?? null,
     psk_env: h.authTokenEnv,
+    source: h.source ?? null,
   };
 }
 
@@ -250,12 +262,19 @@ export async function buildOverview(
       loaded_at: iso(cfg.loadedAt),
       reloads: cfg.reloads ?? 0,
       problems,
+      inline: cfg.inline ?? null,
     },
     default_provider: deps.defaultProvider || null,
     trusted_proxies: source.trustedProxies ?? [],
     providers: [...deps.providers.values()]
       .sort((a, b) => a.name.localeCompare(b.name))
-      .map((p) => describeProvider(p, source.credentialSet)),
+      .map((p) =>
+        describeProvider(
+          p,
+          source.credentialSet,
+          source.providerSources?.[p.name],
+        ),
+      ),
     disabled_providers: source.disabledProviders ?? [],
     hosts: deps.hosts.describe().map(describeHost),
     you: {
@@ -395,7 +414,7 @@ export const DASHBOARD_HTML = `<!doctype html>
       you.appendChild(el("p", { class: "muted" }, ["Requests from this address are accepted by the proxy."]));
     } else {
       you.appendChild(el("p", null, ["Seen as ", code(y.ip), " ", pill("not in host policy", "bad")]));
-      you.appendChild(el("p", { class: "muted" }, ["Agents at this address get 403 PROXY_HOST_DENIED. To allow them, add to hosts.yaml:"]));
+      you.appendChild(el("p", { class: "muted" }, ["Agents at this address get 403 PROXY_HOST_DENIED. To allow them, add a host with address " + y.ip + " to the app's Host Access settings (OUTPOST_HOSTS), or add to hosts.yaml:"]));
       var v6 = y.ip.indexOf(":") >= 0;
       you.appendChild(el("pre", null, ["hosts:\\n  - id: my-agent\\n    cidrs: [\\"" + y.ip + (v6 ? "/128" : "/32") + "\\"]\\n    can_call_sensitive: false\\n    auth_token_env: MY_AGENT_TOKEN   # then set MY_AGENT_TOKEN as an env var"]));
     }
@@ -404,6 +423,7 @@ export const DASHBOARD_HTML = `<!doctype html>
     // Configuration
     var cfg = clear($("config"));
     [["Providers dir", o.config.providers_dir], ["Hosts file", o.config.hosts_file],
+     ["From environment", !o.config.inline ? null : ([o.config.inline.hosts ? "OUTPOST_HOSTS" : "", o.config.inline.providers ? "OUTPOST_PROVIDERS" : ""].filter(Boolean).join(", ") || "none — files only")],
      ["Default provider", o.default_provider || "(none — X-Provider required)"],
      ["Live reload", o.config.watch == null ? "—" : (o.config.watch ? "on — edits apply without a restart" : "off — restart after editing")],
      ["Last loaded", fmtTime(o.config.loaded_at) + (o.config.reloads ? " (" + o.config.reloads + " reload" + (o.config.reloads === 1 ? "" : "s") + ")" : "")]
@@ -426,7 +446,7 @@ export const DASHBOARD_HTML = `<!doctype html>
     var pv = clear($("providers"));
     var failed = o.config.problems.filter(function (p) { return p.scope === "provider"; });
     if (!o.providers.length && !failed.length) {
-      pv.appendChild(el("p", { class: "empty" }, ["No providers loaded. Drop a YAML into the providers directory" + (o.config.watch ? " — it is picked up automatically." : " and restart.")]));
+      pv.appendChild(el("p", { class: "empty" }, ["No providers loaded. Add one in the app's Providers settings (OUTPOST_PROVIDERS), or drop a YAML into the providers directory" + (o.config.watch ? " — it is picked up automatically." : " and restart.")]));
     } else {
       var rows = o.providers.map(function (p) {
         var creds = p.auth.credentials.length ? [] : [el("span", { class: "muted" }, ["none"])];
@@ -441,7 +461,7 @@ export const DASHBOARD_HTML = `<!doctype html>
         var rl = Object.keys(p.forwarding.rate_limits).map(function (cat) {
           return cat + ": " + p.forwarding.rate_limits[cat].map(function (w) { return w.capacity + "/" + (w.window_ms / 1000) + "s"; }).join(", ");
         }).join(" · ") || "none";
-        return [[el("strong", null, [p.name]), p.description ? el("div", { class: "muted" }, [p.description]) : ""],
+        return [[el("strong", null, [p.name]), p.description ? el("div", { class: "muted" }, [p.description]) : "", p.source ? el("div", { class: "muted" }, [p.source]) : ""],
                 code(p.base_url), code(p.auth.type), creds, fwd, el("span", { class: "mono" }, [rl])];
       });
       failed.forEach(function (f) {
@@ -456,9 +476,9 @@ export const DASHBOARD_HTML = `<!doctype html>
 
     // Hosts
     var hs = clear($("hosts"));
-    if (!o.hosts.length) hs.appendChild(el("p", { class: "empty" }, ["hosts.yaml has no entries — every request is denied."]));
+    if (!o.hosts.length) hs.appendChild(el("p", { class: "empty" }, ["No host entries — every request is denied."]));
     else hs.appendChild(table(["Host", "CIDRs", "Sensitive calls", "Pre-shared key", "Description"], o.hosts.map(function (h) {
-      return [code(h.id), el("span", { class: "mono" }, [h.cidrs.join(", ")]),
+      return [[code(h.id), h.source ? el("div", { class: "muted" }, [h.source]) : ""], el("span", { class: "mono" }, [h.cidrs.join(", ")]),
               pill(h.can_call_sensitive ? "allowed" : "denied", h.can_call_sensitive ? "warn" : "ok"),
               h.psk_env ? [pill("required", "ok"), " ", code(h.psk_env)] : pill("none", "warn"),
               el("span", { class: "muted" }, [h.description || ""])];

@@ -2,13 +2,14 @@
 
 Outpost is available in the **community train** of the TrueNAS Apps catalog. This
 page covers what the app installs, how the installation form maps onto Outpost's
-configuration, how to add providers once it is running, and the dashboard that
-shows you what it loaded.
+configuration, how to add hosts and providers, and the dashboard that shows you
+what it loaded.
 
-The packaging follows the catalog's Traefik app one for one: a single config
-dataset that is watched for changes, a dashboard on the same port as the
-service, credentials as environment variables, and a read-only status page that
-never shows a secret.
+The packaging follows the catalog's Traefik app: everything is configurable from
+the app form (hosts and providers are structured lists, like Traefik's entry
+points), a config dataset that is watched for changes is there for anyone who
+prefers YAML files, the dashboard is on the same port as the service, and the
+read-only status page never shows a secret.
 
 If you are not on TrueNAS, see the [README](../README.md) — everything here also
 applies to any Docker host, the form fields are just environment variables and
@@ -49,7 +50,50 @@ config dataset before the app starts, and exits.
 | **Dashboard**                        | `OUTPOST_DASHBOARD`. On by default; the portal link opens `/dashboard`. Off removes `/dashboard`, `/api/overview` and the redirect from `/`, and the portal opens `/docs` instead. |
 | **Redis Password**                   | Password for the sibling Redis. Outpost receives it as `REDIS_URL=redis://default:<password>@outpost-redis:6379`. |
 | **Default Provider**                 | `OUTPOST_DEFAULT_PROVIDER`. Optional — when set, requests without an `X-Provider` header use it.      |
-| **Additional Environment Variables** | Free-form `name`/`value` pairs. **This is where provider credentials go** (`GITHUB_TOKEN`, `STRIPE_SECRET_KEY`, …) and where you set the per-host PSKs referenced by `auth_token_env`. |
+| **Additional Environment Variables** | Free-form `name`/`value` pairs. Credentials for providers defined as files or with *Custom* authentication (`GITHUB_TOKEN`, `STRIPE_SECRET_KEY`, …), and PSKs referenced by `auth_token_env` in `hosts.yaml`. Hosts and providers configured in the form need nothing here. |
+
+### Host Access
+
+**Hosts** is the list of machines allowed to call Outpost. Anything that matches
+no host gets a `403`. Each host has:
+
+| Field                     | Effect                                                                      |
+| ------------------------- | --------------------------------------------------------------------------- |
+| **Name**                  | Label shown on the dashboard and in logs. Letters, digits, `-`, `_`.        |
+| **Addresses**             | IPs (`192.168.1.50`) or CIDR ranges (`192.168.1.0/24`), IPv4 or IPv6.       |
+| **Allow Sensitive Calls** | Off by default. Sensitive calls are every write, plus routes marked sensitive. |
+| **Pre-Shared Key**        | Optional, recommended for anything but this machine. The agent must send it as `X-Outpost-Auth`. At least 16 characters; `openssl rand -hex 32` makes a good one. |
+| **Description**           | Free text for the dashboard.                                                |
+
+The seeded `hosts.yaml` on the dataset (loopback only) still applies; hosts from
+the form are added to it, and replace a file entry with the same name.
+
+### Providers
+
+**Providers** is the list of APIs agents can call. Each provider has:
+
+| Field                         | Effect                                                                  |
+| ----------------------------- | ----------------------------------------------------------------------- |
+| **Name**                      | What agents send in `X-Provider`. Lowercase letters, digits, `-`, `_`.  |
+| **Base URL**                  | The upstream API; request paths are appended to it.                     |
+| **Authentication**            | *Bearer token*, *API key in a header* (header name and optional prefix), *API key in a query parameter* (parameter name), *Username and password*, *None*, or *Custom*. |
+| **Token / API Key**, **Username**, **Password** | The credential, shown for the matching authentication type. Stored as an environment variable on the app, never on the dataset. |
+| **Authentication (YAML)**     | For *Custom*: the provider's `auth:` block — OAuth2 client credentials, HMAC signing, plugins, anything in the [README](../README.md). Credentials are referenced by variable name and set under *Additional Environment Variables*. |
+| **Forwarding**                | *Forward every path* (with **Treat Writes As Sensitive**), or *Forward only the routes listed* — the safer choice. |
+| **Allowed Routes**            | For the allowlist: method (or *Any*), path pattern (`*` one segment, `**` any), whether it is sensitive, and how long to cache responses. |
+| **Denied Paths**              | Patterns never forwarded, in either mode.                               |
+| **Advanced Settings (YAML)**  | Optional. Any other provider setting merged over the fields above — rate limits, `default_headers`, `strip_response_headers`. |
+
+Providers in the form are loaded alongside the YAML files in `providers/`, and
+replace a file with the same provider name.
+
+**What the form checks before deploying.** Field formats are validated as you
+type (names, addresses, URLs, header names, path patterns, key length). When
+you save, the app refuses to deploy — with a message naming the entry — if two
+hosts or two providers share a name, a host has no address, a provider is
+missing its credential, or an allowlist has no routes. Custom and advanced YAML
+is checked by Outpost itself: a mistake there marks that provider *failed to
+load* on the dashboard, with the reason, and everything else keeps running.
 
 ### User and Group
 
@@ -91,8 +135,8 @@ overwritten afterwards.
 **Edits apply live.** The app sets `OUTPOST_CONFIG_WATCH=true`, so both files
 are re-read whenever they change on the dataset — the same behaviour as the
 Traefik app's config directory. There is no restart step after adding a
-provider or widening `hosts.yaml`. Changes to *environment variables* (a new
-credential) still go through **Edit** on the app, which restarts it.
+provider or widening `hosts.yaml`. Changes made in the app form (hosts,
+providers, credentials) go through **Edit** on the app, which redeploys it.
 
 ---
 
@@ -108,6 +152,9 @@ credential) still go through **Edit** on the app, which restarts it.
 | `OUTPOST_SEED_CONFIG`    | *(unset)*            | Set to `false` to disable first-boot config seeding      |
 | `OUTPOST_DASHBOARD`      | `true`               | Serve `/dashboard` and `/api/overview` (the app form's **Dashboard** toggle) |
 | `OUTPOST_CONFIG_WATCH`   | `true`               | Re-read `providers/` and `hosts.yaml` when they change on disk |
+| `OUTPOST_HOSTS`          | *(unset)*            | Host entries as YAML/JSON (same shape as `hosts.yaml`), merged with the file. Set by the form's **Hosts** list |
+| `OUTPOST_PROVIDERS`      | *(unset)*            | Provider definitions as a YAML/JSON list, merged with `providers/`. Set by the form's **Providers** list |
+| `OUTPOST_HOST_<NAME>_PSK`, `OUTPOST_PROVIDER_<NAME>_TOKEN` (`_USERNAME`, `_PASSWORD`) | — | Generated by the form for each key or credential you enter |
 | `OUTPOST_VERSION`        | *(baked into the image)* | Release version shown on the dashboard and in `/openapi.json` |
 | `REDIS_URL`              | `redis://localhost:6379/0` | Redis connection string                            |
 | `OUTPOST_TRUSTED_PROXIES` | *(unset)*           | Set when a reverse proxy fronts Outpost — see below      |
@@ -121,6 +168,19 @@ existing deployments keep working. When both are set, the `OUTPOST_*` name wins.
 ---
 
 ## Adding a provider
+
+**From the app form** (the usual way):
+
+1. **Edit** the app → **Providers** → **Add**.
+2. Fill in a name (`github`), the base URL (`https://api.github.com`), pick
+   *Bearer token* and paste the token.
+3. Optionally switch **Forwarding** to *Forward only the routes listed* and add
+   routes such as `GET /repos/**`.
+4. Save. The app redeploys, and the provider appears on the dashboard with its
+   credential shown as a green, set variable.
+
+**As a file on the dataset** (handy for many providers, or to keep them in
+version control):
 
 1. **Get to the dataset.** The config dataset is at
    `/mnt/<pool>/ix-apps/app_mounts/outpost/config` (or wherever you pointed the
@@ -146,6 +206,9 @@ existing deployments keep working. When both are set, the `OUTPOST_*` name wins.
    saved; its credential shows as a green `GITHUB_TOKEN` badge once the variable
    is set. No restart is needed for the YAML — the environment variable in step
    3 is the only thing that restarts the app.
+
+   The dashboard labels each provider and host with where it came from — a file
+   name, or `OUTPOST_PROVIDERS` / `OUTPOST_HOSTS` for the app form.
 
    A provider whose credential is missing shows up as *failed to load* with the
    reason, and the proxy keeps running with the rest. `GET /providers` gives the
@@ -222,7 +285,8 @@ soon as your agents run on another machine. When you widen it:
 
 1. **Add a pre-shared key to every non-loopback host.** IP allowlisting alone is
    weak on a flat LAN (anything that can spoof or occupy an IP gets your
-   credentials' capabilities). Give the host entry an `auth_token_env`:
+   credentials' capabilities). In the app form, fill in the host's
+   **Pre-Shared Key**; in `hosts.yaml`, give the entry an `auth_token_env`:
 
    ```yaml
    hosts:
@@ -236,9 +300,9 @@ soon as your agents run on another machine. When you widen it:
    additional environment variable, and have the agent send it as
    `X-Outpost-Auth: <token>`. Outpost strips the header before forwarding.
 
-2. **Use allowlist mode for those providers.** `forwarding.mode: allowlist`
-   forwards only the routes you list, instead of everything the upstream
-   exposes:
+2. **Use allowlist mode for those providers.** *Forward only the routes listed*
+   in the form, or `forwarding.mode: allowlist` in YAML, forwards only the
+   routes you list instead of everything the upstream exposes:
 
    ```yaml
    forwarding:
@@ -256,7 +320,7 @@ soon as your agents run on another machine. When you widen it:
    travels in a header.
 
 Credentials themselves live only in the app's environment variables, never in
-the config dataset.
+the config dataset — including those typed into the form.
 
 ---
 
@@ -284,12 +348,15 @@ If it did not move, the file may not have been saved where Outpost reads it
 (the paths are shown in *Configuration*), or the edit produced a parse error
 (shown under problems, and the previous configuration is kept). Live reload
 uses inotify with a mtime poll every 15 s as a fallback, so an edit over
-SMB/NFS is picked up within that window at worst.
+SMB/NFS is picked up within that window at worst. If the file defines a
+provider or host with the same name as one in the app form, the form's entry
+wins — the dashboard shows which source each entry came from.
 
 **Agent gets `403 PROXY_HOST_DENIED`.** Its source address does not match any
 CIDR in `hosts.yaml`; the error message names the address it saw, and opening
 the dashboard from the agent's machine shows the same address in *Your
-connection* together with the `hosts.yaml` lines to allow it. Remember that
+connection*. Add that address under **Hosts** in the app form (or to
+`hosts.yaml`). Remember that
 this is the socket peer — a container on the same host arrives from the Docker
 bridge range, not from `127.0.0.1` — and that forwarding headers only count when
 the connection comes from an address listed in `OUTPOST_TRUSTED_PROXIES`.

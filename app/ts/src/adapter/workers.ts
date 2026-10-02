@@ -20,7 +20,10 @@ import { buildAppDeps } from "../bootstrap.ts";
 import { envFlag, envFromWorkers } from "../core/env.ts";
 import { buildApp } from "../index.ts";
 import type { AppDeps } from "../index.ts";
-import { loadProvidersFromYamls } from "../providers/loader.ts";
+import {
+  loadProvidersFromYamls,
+  withInlineProviders,
+} from "../providers/loader.ts";
 import { KvCache } from "../storage/cache_kv.ts";
 import { KvRateLimit } from "../storage/rate_limit_kv.ts";
 import { KvStorage } from "../storage/kv.ts";
@@ -51,17 +54,24 @@ async function bootstrap(workerEnv: WorkerEnv): Promise<AppDeps> {
   const cache = new KvCache(workerEnv.CACHE);
   const rateLimits = new KvRateLimit(workerEnv.RATE_LIMIT);
 
-  const { providers: defs } = await loadProvidersFromYamls([
-    { name: "groww.yaml", content: grokoYaml },
-    { name: "upstox.yaml", content: upstoxYaml },
-    { name: "stripe.yaml", content: stripeYaml },
-    { name: "openai.yaml", content: openaiYaml },
-  ]);
+  // OUTPOST_PROVIDERS / OUTPOST_HOSTS vars (wrangler `[vars]`) merge on top of
+  // the bundled files, exactly as on Node.
+  const loaded = await withInlineProviders(
+    await loadProvidersFromYamls([
+      { name: "groww.yaml", content: grokoYaml },
+      { name: "upstox.yaml", content: upstoxYaml },
+      { name: "stripe.yaml", content: stripeYaml },
+      { name: "openai.yaml", content: openaiYaml },
+    ]),
+    env.PROVIDERS_INLINE,
+  );
+  const defs = loaded.providers;
 
   const deps = await buildAppDeps({
     env,
     defs,
     hostsYaml,
+    hostsSource: "hosts.yaml",
     tokenStorage,
     cache,
     rateLimits,
@@ -79,6 +89,7 @@ async function bootstrap(workerEnv: WorkerEnv): Promise<AppDeps> {
       version: env.VERSION,
       runtime: "workers",
       startedAt: Date.now(),
+      providerSources: Object.fromEntries(loaded.sources),
       credentialSet: (name) => {
         const v = workerEnv[name];
         return typeof v === "string" && v.length > 0;

@@ -639,6 +639,36 @@ loaded* line and reload counter confirm it. A file that fails to parse, or a
 the previous configuration stays in force. Set `OUTPOST_CONFIG_WATCH=false` to
 go back to read-once-at-startup.
 
+### Configuration from environment variables
+
+On the TypeScript runtime, hosts and providers can also be given as YAML or
+JSON in two environment variables. They are merged on top of the files, so a
+deployment that sets neither works exactly as before:
+
+| Variable | Contents |
+|---|---|
+| `OUTPOST_HOSTS` | Same as `hosts.yaml`: a `hosts:` mapping or a bare list. `cidrs` may be a list or a comma-separated string; bare IPs count as single hosts. An entry replaces a `hosts.yaml` entry with the same `id`. |
+| `OUTPOST_PROVIDERS` | A list of provider definitions (or a `providers:` mapping). Each item is a mapping or a YAML string; `auth` may be YAML text, and an optional `extra` YAML string is merged over the item. An entry replaces a `providers/*.yaml` with the same `name`. |
+
+```yaml
+# docker-compose.yml
+environment:
+  GITHUB_TOKEN: ghp_...
+  OUTPOST_HOSTS: |
+    - { id: lan, cidrs: "192.168.1.0/24", auth_token_env: LAN_PSK }
+  OUTPOST_PROVIDERS: |
+    - name: github
+      base_url: https://api.github.com
+      auth: { type: bearer_static, env: GITHUB_TOKEN }
+```
+
+Neither variable should hold a secret: as in the files, credentials and PSKs are
+referenced by the name of the variable that holds them. This is what the
+TrueNAS app's **Hosts** and **Providers** form fields are built on — see
+[docs/TRUENAS.md](docs/TRUENAS.md). A malformed `OUTPOST_HOSTS` stops startup
+(like a malformed `hosts.yaml`); a bad provider entry is reported on the
+dashboard and skipped.
+
 ## Response Headers
 
 | Header | Values |
