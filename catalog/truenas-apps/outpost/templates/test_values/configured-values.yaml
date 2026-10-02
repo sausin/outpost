@@ -1,0 +1,120 @@
+resources:
+  limits:
+    cpus: 2.0
+    memory: 1024
+
+TZ: Etc/UTC
+
+outpost:
+  dashboard: true
+  redis_password: outpost
+  default_provider: github
+  additional_envs:
+    - name: EXAMPLE_CLIENT_ID
+      value: test-client-id
+    - name: EXAMPLE_CLIENT_SECRET
+      value: test-client-secret-not-real
+
+hosts:
+  - id: lan-agent
+    addresses:
+      - 192.168.1.0/24
+    can_call_sensitive: false
+    psk: 0123456789abcdef0123456789abcdef
+    description: Agents on the home LAN
+  - id: truenas-apps
+    addresses:
+      - 172.16.0.0/12
+    can_call_sensitive: true
+    psk: ""
+    description: ""
+
+providers:
+  - name: github
+    base_url: https://api.github.com
+    description: GitHub REST API
+    auth_type: bearer
+    token: ghp_test-token-not-real
+    header: X-API-Key
+    prefix: ""
+    param: api_key
+    username: ""
+    password: ""
+    auth_yaml: ""
+    mode: allowlist
+    allow:
+      - method: GET
+        pattern: /repos/**
+        sensitive: false
+        cache_ttl: 60
+      - method: POST
+        pattern: /repos/*/*/issues
+        sensitive: true
+        cache_ttl: 0
+    writes_sensitive: true
+    deny: []
+    extra: ""
+  - name: weather
+    base_url: https://api.weather.example
+    description: ""
+    auth_type: api_key_query
+    token: weather-key-not-real
+    header: X-API-Key
+    prefix: ""
+    param: appid
+    username: ""
+    password: ""
+    auth_yaml: ""
+    mode: transparent
+    allow: []
+    writes_sensitive: true
+    deny:
+      - /admin/**
+    extra: |
+      forwarding:
+        rate_limits:
+          default: [{capacity: 5, window_ms: 1000}]
+  - name: example-oauth
+    base_url: https://api.example.com
+    description: ""
+    auth_type: custom
+    token: ""
+    header: X-API-Key
+    prefix: ""
+    param: api_key
+    username: ""
+    password: ""
+    auth_yaml: |
+      type: oauth2_client_credentials
+      token_url: https://auth.example.com/oauth/token
+      client_id_env: EXAMPLE_CLIENT_ID
+      client_secret_env: EXAMPLE_CLIENT_SECRET
+    mode: transparent
+    allow: []
+    writes_sensitive: true
+    deny: []
+    extra: ""
+
+run_as:
+  user: 568
+  group: 568
+
+network:
+  host_network: false
+  web_port:
+    bind_mode: published
+    port_number: 30463
+  networks: []
+
+ix_volumes:
+  config: /opt/tests/mnt/outpost/config
+
+storage:
+  config:
+    type: ix_volume
+    ix_volume_config:
+      dataset_name: config
+      create_host_path: true
+  additional_storage: []
+
+labels: []

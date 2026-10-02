@@ -1,6 +1,10 @@
 groups:
   - name: Outpost Configuration
     description: Configure Outpost
+  - name: Host Access Configuration
+    description: Choose which machines may use Outpost
+  - name: Providers Configuration
+    description: Configure the APIs Outpost can call
   - name: User and Group Configuration
     description: Configure User and Group for Outpost
   - name: Network Configuration
@@ -64,10 +68,11 @@ questions:
         - variable: additional_envs
           label: Additional Environment Variables
           description: |
-            <b>This is where provider credentials go.</b> Each provider YAML names
-            the environment variable holding its credential
-            (<code>GITHUB_TOKEN</code>, <code>STRIPE_SECRET_KEY</code>, ...) —
-            add those name/value pairs here.</br>
+            Credentials for providers set up with <i>Custom</i> authentication or
+            as YAML files on the config dataset go here: each names the
+            environment variable holding its credential
+            (<code>GITHUB_TOKEN</code>, <code>STRIPE_SECRET_KEY</code>, ...).
+            Providers and hosts configured in this form need nothing here.</br>
             Your agents never see these values: Outpost injects them into the
             upstream request after the agent's call reaches the proxy.</br>
             Per-host pre-shared keys referenced by <code>auth_token_env</code> in
@@ -91,6 +96,307 @@ questions:
                       schema:
                         type: string
                         private: true
+
+  - variable: hosts
+    label: Hosts
+    group: Host Access Configuration
+    description: |
+      The machines allowed to send requests through Outpost. A request from an
+      address that matches no host is refused with <code>403</code>.</br>
+      Use the address Outpost actually sees: a machine on your LAN by its LAN
+      address (<code>192.168.1.50</code>, or <code>192.168.1.0/24</code> for the
+      whole subnet), another app on this TrueNAS by the Docker range
+      (<code>172.16.0.0/12</code>). The dashboard's <i>Your connection</i> card
+      shows the address of the machine you open it from.</br>
+      Hosts here are added to <code>hosts.yaml</code> on the config dataset
+      (which allows loopback only), and replace an entry there with the same name.
+    schema:
+      type: list
+      default: []
+      items:
+        - variable: host
+          label: Host
+          schema:
+            type: dict
+            attrs:
+              - variable: id
+                label: Name
+                description: A label for this host, shown on the dashboard and in the logs.
+                schema:
+                  type: string
+                  required: true
+                  max_length: 48
+                  valid_chars: '^[a-zA-Z0-9][a-zA-Z0-9_-]*$'
+                  valid_chars_error: Use letters, digits, '-' and '_' only, starting with a letter or digit.
+              - variable: addresses
+                label: Addresses
+                description: |
+                  IP addresses (<code>192.168.1.50</code>) or ranges in CIDR
+                  notation (<code>192.168.1.0/24</code>). IPv6 works too.
+                schema:
+                  type: list
+                  default: []
+                  items:
+                    - variable: address
+                      label: Address
+                      schema:
+                        type: string
+                        required: true
+                        valid_chars: '^((((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])(/(3[0-2]|[12]?[0-9]))?)|([0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F.]*(/(12[0-8]|1[01][0-9]|[1-9]?[0-9]))?)$'
+                        valid_chars_error: Enter an IP address (192.168.1.50) or a CIDR range (192.168.1.0/24).
+              - variable: can_call_sensitive
+                label: Allow Sensitive Calls
+                description: |
+                  Let this host make calls marked sensitive — by default every
+                  write (<code>POST</code>, <code>PUT</code>, <code>PATCH</code>,
+                  <code>DELETE</code>). Leave off for read-only agents.
+                schema:
+                  type: boolean
+                  default: false
+              - variable: psk
+                label: Pre-Shared Key
+                description: |
+                  Recommended for every host that is not this machine. When set,
+                  requests from this host must also send
+                  <code>X-Outpost-Auth: &lt;key&gt;</code>, so an address alone is
+                  not enough. Generate one with <code>openssl rand -hex 32</code>.
+                  Outpost strips the header before forwarding.
+                schema:
+                  type: string
+                  default: ""
+                  private: true
+                  valid_chars: '^$|^[A-Za-z0-9._~+/=-]{16,256}$'
+                  valid_chars_error: Use at least 16 characters (letters, digits and . _ ~ + / = -), or leave empty.
+              - variable: description
+                label: Description
+                schema:
+                  type: string
+                  default: ""
+
+  - variable: providers
+    label: Providers
+    group: Providers Configuration
+    description: |
+      The APIs your agents can call through Outpost. An agent picks one with the
+      <code>X-Provider: &lt;name&gt;</code> header and sends the request path
+      as-is; Outpost adds the credential and forwards it to the base URL.</br>
+      Credentials entered here are passed to Outpost as environment variables and
+      never reach your agents or the config dataset.</br>
+      Providers here are loaded alongside the YAML files in
+      <code>providers/</code> on the config dataset, and replace one there with
+      the same name.
+    schema:
+      type: list
+      default: []
+      items:
+        - variable: provider
+          label: Provider
+          schema:
+            type: dict
+            attrs:
+              - variable: name
+                label: Name
+                description: What agents put in the <code>X-Provider</code> header, e.g. <code>github</code>.
+                schema:
+                  type: string
+                  required: true
+                  max_length: 48
+                  valid_chars: '^[a-z0-9][a-z0-9_-]*$'
+                  valid_chars_error: Use lowercase letters, digits, '-' and '_' only, starting with a letter or digit.
+              - variable: base_url
+                label: Base URL
+                description: The upstream API, e.g. <code>https://api.github.com</code>. Request paths are appended to it.
+                schema:
+                  type: string
+                  required: true
+                  valid_chars: '^https?://[^\s/?#]+[^\s]*$'
+                  valid_chars_error: Enter a full URL starting with https:// (or http://).
+              - variable: description
+                label: Description
+                schema:
+                  type: string
+                  default: ""
+              - variable: auth_type
+                label: Authentication
+                schema:
+                  type: string
+                  default: bearer
+                  required: true
+                  enum:
+                    - value: bearer
+                      description: Bearer token (Authorization header)
+                    - value: api_key_header
+                      description: API key in a header
+                    - value: api_key_query
+                      description: API key in a query parameter
+                    - value: basic_auth
+                      description: Username and password (HTTP Basic)
+                    - value: none
+                      description: None
+                    - value: custom
+                      description: Custom (OAuth2, HMAC, plugins, ...) — written in YAML
+              - variable: token
+                label: Token / API Key
+                description: The credential Outpost adds to each request.
+                schema:
+                  type: string
+                  default: ""
+                  private: true
+                  show_if: [["auth_type", "!=", "none"], ["auth_type", "!=", "basic_auth"], ["auth_type", "!=", "custom"]]
+              - variable: header
+                label: Header Name
+                schema:
+                  type: string
+                  default: X-API-Key
+                  show_if: [["auth_type", "=", "api_key_header"]]
+                  valid_chars: '^[A-Za-z0-9!#$%&''*+.^_`|~-]+$'
+                  valid_chars_error: Enter a valid HTTP header name, e.g. X-API-Key.
+              - variable: prefix
+                label: Value Prefix
+                description: Text placed before the key, e.g. <code>Token </code> (with the trailing space). Usually empty.
+                schema:
+                  type: string
+                  default: ""
+                  show_if: [["auth_type", "=", "api_key_header"]]
+              - variable: param
+                label: Query Parameter
+                schema:
+                  type: string
+                  default: api_key
+                  show_if: [["auth_type", "=", "api_key_query"]]
+                  valid_chars: '^[A-Za-z0-9._~-]+$'
+                  valid_chars_error: Use letters, digits and . _ ~ - only.
+              - variable: username
+                label: Username
+                schema:
+                  type: string
+                  default: ""
+                  show_if: [["auth_type", "=", "basic_auth"]]
+              - variable: password
+                label: Password
+                schema:
+                  type: string
+                  default: ""
+                  private: true
+                  show_if: [["auth_type", "=", "basic_auth"]]
+              - variable: auth_yaml
+                label: Authentication (YAML)
+                description: |
+                  The provider's <code>auth:</code> block, e.g.</br>
+                  <code>type: oauth2_client_credentials</code></br>
+                  <code>token_url: https://auth.example.com/oauth/token</code></br>
+                  <code>client_id_env: EXAMPLE_CLIENT_ID</code></br>
+                  <code>client_secret_env: EXAMPLE_CLIENT_SECRET</code></br>
+                  Credentials are referenced by environment variable name — add
+                  the values under <i>Additional Environment Variables</i>.
+                schema:
+                  type: text
+                  default: ""
+                  show_if: [["auth_type", "=", "custom"]]
+              - variable: mode
+                label: Forwarding
+                schema:
+                  type: string
+                  default: transparent
+                  required: true
+                  enum:
+                    - value: transparent
+                      description: Forward every path (except denied ones)
+                    - value: allowlist
+                      description: Forward only the routes listed below (recommended)
+              - variable: allow
+                label: Allowed Routes
+                description: |
+                  Patterns: <code>*</code> matches one path segment,
+                  <code>**</code> any number, e.g. <code>/repos/**</code>.
+                schema:
+                  type: list
+                  default: []
+                  show_if: [["mode", "=", "allowlist"]]
+                  items:
+                    - variable: rule
+                      label: Route
+                      schema:
+                        type: dict
+                        attrs:
+                          - variable: method
+                            label: Method
+                            schema:
+                              type: string
+                              default: GET
+                              required: true
+                              enum:
+                                - value: GET
+                                  description: GET
+                                - value: POST
+                                  description: POST
+                                - value: PUT
+                                  description: PUT
+                                - value: PATCH
+                                  description: PATCH
+                                - value: DELETE
+                                  description: DELETE
+                                - value: HEAD
+                                  description: HEAD
+                                - value: "*"
+                                  description: Any method
+                          - variable: pattern
+                            label: Path Pattern
+                            schema:
+                              type: string
+                              required: true
+                              valid_chars: '^/\S*$'
+                              valid_chars_error: Path patterns start with / and contain no spaces, e.g. /repos/**.
+                          - variable: sensitive
+                            label: Sensitive
+                            description: Only hosts with <i>Allow Sensitive Calls</i> may use this route.
+                            schema:
+                              type: boolean
+                              default: false
+                          - variable: cache_ttl
+                            label: Cache (seconds)
+                            description: Cache successful responses this long. 0 disables caching.
+                            schema:
+                              type: int
+                              default: 0
+                              min: 0
+                              max: 86400
+              - variable: writes_sensitive
+                label: Treat Writes As Sensitive
+                description: |
+                  <code>POST</code>, <code>PUT</code>, <code>PATCH</code> and
+                  <code>DELETE</code> are only allowed from hosts with <i>Allow
+                  Sensitive Calls</i>.
+                schema:
+                  type: boolean
+                  default: true
+                  show_if: [["mode", "=", "transparent"]]
+              - variable: deny
+                label: Denied Paths
+                description: Path patterns that are never forwarded, whatever the mode.
+                schema:
+                  type: list
+                  default: []
+                  items:
+                    - variable: pattern
+                      label: Path Pattern
+                      schema:
+                        type: string
+                        required: true
+                        valid_chars: '^/\S*$'
+                        valid_chars_error: Path patterns start with / and contain no spaces, e.g. /admin/**.
+              - variable: extra
+                label: Advanced Settings (YAML)
+                description: |
+                  Optional. Any other provider setting, merged over the fields
+                  above — e.g. rate limits:</br>
+                  <code>forwarding:</code></br>
+                  <code>&nbsp;&nbsp;rate_limits:</code></br>
+                  <code>&nbsp;&nbsp;&nbsp;&nbsp;default: [{capacity: 10, window_ms: 1000}]</code></br>
+                  or <code>default_headers</code>. See the provider schema in the README.
+                schema:
+                  type: text
+                  default: ""
 
   - variable: run_as
     label: ""
