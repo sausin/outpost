@@ -32,7 +32,10 @@ import type { ConfigProblem } from "../core/types.ts";
 import { buildApp } from "../index.ts";
 import type { AppDeps } from "../index.ts";
 import { makeFilePluginLoader } from "../plugins/file_loader.ts";
-import { loadProvidersFromDir } from "../providers/loader.ts";
+import {
+  loadProvidersFromDir,
+  withInlineProviders,
+} from "../providers/loader.ts";
 import type { StatusSource, StorageHealth } from "../status.ts";
 import { RedisCache } from "../storage/cache_redis.ts";
 import { RedisRateLimit } from "../storage/rate_limit_redis.ts";
@@ -126,6 +129,10 @@ async function main(): Promise<void> {
       watch,
       reloads: 0,
       problems: [],
+      inline: {
+        hosts: env.HOSTS_INLINE.trim() !== "",
+        providers: env.PROVIDERS_INLINE.trim() !== "",
+      },
     },
     trustedProxies: parseTrustedProxies(env.TRUSTED_PROXIES),
     disabledProviders: [],
@@ -141,10 +148,16 @@ async function main(): Promise<void> {
     deps: AppDeps;
     problems: ConfigProblem[];
     disabled: Array<{ name: string; source: string }>;
+    sources: Map<string, string>;
   }
 
+  // OUTPOST_HOSTS / OUTPOST_PROVIDERS cannot change without a restart, but
+  // re-reading them on every reload keeps a single merge path.
   const load = async (): Promise<Loaded> => {
-    const loaded = await loadProvidersFromDir(env.PROVIDERS_DIR);
+    const loaded = await withInlineProviders(
+      await loadProvidersFromDir(env.PROVIDERS_DIR),
+      env.PROVIDERS_INLINE,
+    );
     const problems: ConfigProblem[] = [...loaded.problems];
 
     let hostsYaml = "hosts: []";
@@ -170,7 +183,12 @@ async function main(): Promise<void> {
       resolveClientIp,
       loadPlugin,
     });
-    return { deps, problems, disabled: loaded.disabled };
+    return {
+      deps,
+      problems,
+      disabled: loaded.disabled,
+      sources: loaded.sources,
+    };
   };
 
   let current: AppDeps;
@@ -179,6 +197,7 @@ async function main(): Promise<void> {
     status.config!.loadedAt = Date.now();
     status.config!.problems = loaded.problems;
     status.disabledProviders = loaded.disabled;
+    status.providerSources = Object.fromEntries(loaded.sources);
   };
 
   // First load: a hosts.yaml that cannot be applied is fatal (see header).

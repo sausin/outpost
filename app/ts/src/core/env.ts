@@ -43,6 +43,13 @@ export interface AppEnv {
   CONFIG_WATCH: string;
   /** Release version baked into the image; "dev" when unset. */
   VERSION: string;
+  /**
+   * OUTPOST_HOSTS / OUTPOST_PROVIDERS: host policy and provider definitions
+   * as YAML/JSON, merged on top of the files — see config/inline.ts. Empty
+   * when unset, which leaves file-only configuration untouched.
+   */
+  HOSTS_INLINE: string;
+  PROVIDERS_INLINE: string;
 
   // Workers: KV bindings; Node: undefined (Redis used instead in Phase 4)
   TOKENS?: KVNamespace;
@@ -86,6 +93,8 @@ function build(source: Record<string, unknown>): AppEnv {
     DASHBOARD: pick(source, ["OUTPOST_DASHBOARD"], "true"),
     CONFIG_WATCH: pick(source, ["OUTPOST_CONFIG_WATCH"], "true"),
     VERSION: pick(source, ["OUTPOST_VERSION", "VERSION"], "dev"),
+    HOSTS_INLINE: pick(source, ["OUTPOST_HOSTS"], ""),
+    PROVIDERS_INLINE: pick(source, ["OUTPOST_PROVIDERS"], ""),
   };
 }
 

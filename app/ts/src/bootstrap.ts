@@ -9,6 +9,7 @@ import type { Context } from "hono";
 
 import { resolve as resolveAuth } from "./auth/registry.ts";
 import type { PluginLoader } from "./auth/types.ts";
+import { HOSTS_VAR, parseInlineHosts } from "./config/inline.ts";
 import type { AppEnv } from "./core/env.ts";
 import { loadHostsFromYaml } from "./core/hosts.ts";
 import type { ConfigProblem } from "./core/types.ts";
@@ -25,6 +26,8 @@ export interface BootstrapInput {
   env: AppEnv;
   defs: Map<string, ProviderDef>;
   hostsYaml: string;
+  /** Label for hostsYaml's entries on the dashboard; defaults to the hosts file path. */
+  hostsSource?: string;
   tokenStorage: Storage;
   cache: CacheBackend;
   rateLimits: RateLimitBackend;
@@ -68,7 +71,14 @@ export async function buildAppDeps(input: BootstrapInput): Promise<AppDeps> {
     }
   }
 
-  const hosts = loadHostsFromYaml(input.hostsYaml, input.env);
+  // OUTPOST_HOSTS is strict: a malformed entry throws here, which is fatal at
+  // boot and keeps the previous policy on a reload — same as hosts.yaml.
+  const hosts = loadHostsFromYaml(input.hostsYaml, input.env, {
+    fileSource: input.hostsSource ?? input.env.HOSTS_CONFIG_PATH,
+    inline: parseInlineHosts(input.env.HOSTS_INLINE),
+    inlineSource: HOSTS_VAR,
+  });
+  problems.push(...hosts.problems);
 
   return {
     providers: built,

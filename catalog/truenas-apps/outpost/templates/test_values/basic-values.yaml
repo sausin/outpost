@@ -13,6 +13,9 @@ outpost:
     - name: EXAMPLE_API_KEY
       value: test-credential-not-a-real-secret
 
+hosts: []
+providers: []
+
 run_as:
   user: 568
   group: 568

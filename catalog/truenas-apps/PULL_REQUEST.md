@@ -18,22 +18,22 @@ and never holds the secret, so a compromised or prompt-injected agent can only
 make the calls the configuration permits and cannot exfiltrate a token it was
 never given.
 
-Adding an upstream API is a YAML file rather than code:
-
-```yaml
-name: github
-base_url: https://api.github.com
-auth: { type: bearer_static, env: GITHUB_TOKEN }
-```
+Everything is configurable from the app form: the **Hosts** list (which
+machines may call Outpost, with an optional pre-shared key each) and the
+**Providers** list (upstream URL, authentication, credential, allowed routes).
+Power users can still drop YAML files into the config dataset, and the two are
+merged.
 
 The app deploys two long-lived containers — the proxy and a sibling
 `valkey/valkey` used for token storage, rate limiting and response caching — plus
 the standard permissions container over a single config dataset.
 
-The shape follows the Traefik app: a `TZ` question, a **Dashboard** toggle, a
-config dataset that is watched so edits apply without a restart, credentials in
-**Additional Environment Variables**, and the portal opening the dashboard on
-the service port. The dashboard is a read-only status page (loaded providers,
+The shape follows the Traefik app: a `TZ` question, a **Dashboard** toggle,
+structured form fields that the template turns into the runtime's configuration
+(Traefik turns its form into CLI flags; Outpost has no flags, so the template
+serialises the form into two environment variables), a config dataset that is
+watched so file edits apply without a restart, and the portal opening the
+dashboard on the service port. The dashboard is a read-only status page (loaded providers,
 host policy, config errors, storage health, and the address the viewer arrives
 from) and never displays a credential value.
 
@@ -43,13 +43,16 @@ from) and never displays a credential value.
 - **Documentation**: https://github.com/sausin/outpost/blob/main/docs/TRUENAS.md
 - **License**: MIT
 - **Image**: `ghcr.io/sausin/outpost-ts` (linux/amd64 + linux/arm64, SemVer tags)
-- **App Version**: 0.4.0
+- **App Version**: 0.5.0
 
 ## Testing
 
 Tested locally with:
 
-- [x] basic-values.yaml
+- [x] basic-values.yaml — nothing configured in the form (fresh install)
+- [x] configured-values.yaml — two hosts (one with a pre-shared key), and
+      providers using bearer, query-parameter and custom (OAuth2 YAML)
+      authentication, an allowlist, a deny list and a rate-limit override
 
 Verified on the rendered compose:
 
@@ -69,6 +72,12 @@ Verified on the rendered compose:
   injected `Authorization` header while the caller sent none.
 - `/api/overview` (the dashboard's data) was checked against the credential
   values set on the container: none appear in it.
+- With `configured-values.yaml`, every host and provider from the form loads and
+  is labelled as coming from the app settings; a provider file on the dataset
+  with the same name does not override the form's.
+- Form mistakes fail the render with a specific message rather than deploying a
+  broken policy: duplicate host or provider names, a host with no address, a
+  provider missing its credential, an allowlist with no routes.
 
 ## Icons and Screenshots
 
@@ -82,9 +91,11 @@ Please upload the following to the CDN:
 
 ## Special Notes
 
-- **Credentials go in Additional Environment Variables**, never on the config
-  dataset. Each provider YAML names the environment variable holding its
-  credential; the form description spells this out.
+- **Secrets stay in their own environment variables.** A token or pre-shared
+  key typed into the form becomes a generated variable
+  (`OUTPOST_PROVIDER_<NAME>_TOKEN`, `OUTPOST_HOST_<NAME>_PSK`); the serialised
+  host/provider lists (`OUTPOST_HOSTS`, `OUTPOST_PROVIDERS`) only reference them
+  by name, and nothing secret is written to the config dataset.
 - **Host policy is the access control.** The seeded `hosts.yaml` permits loopback
   only and everything else gets a 403, so a fresh install is closed by default.
   Outpost matches on the socket peer address (a LAN agent by its LAN address, a
@@ -110,7 +121,7 @@ Please upload the following to the CDN:
 - [x] App runs successfully locally
 - [x] Only modified files under /ix-dev/ or /library/
 - [x] README.md included
-- [ ] Multiple test scenarios tested — only `basic-values.yaml` so far; happy to
-      add a host-path storage variant if you would like one
+- [x] Multiple test scenarios tested — `basic-values.yaml` and
+      `configured-values.yaml`
 - [x] questions.yaml has clear descriptions and follows structure of existing apps
 - [ ] All automated CI checks pass — to be confirmed once CI runs on this PR

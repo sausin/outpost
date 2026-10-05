@@ -172,6 +172,7 @@ describe("/api/overview", () => {
         can_call_sensitive: true,
         description: "Loopback",
         psk_env: null,
+        source: "./hosts.yaml",
       },
       {
         id: "lan-agent",
@@ -179,6 +180,7 @@ describe("/api/overview", () => {
         can_call_sensitive: false,
         description: null,
         psk_env: "LAN_AGENT_TOKEN",
+        source: "./hosts.yaml",
       },
     ]);
 
@@ -189,6 +191,28 @@ describe("/api/overview", () => {
       can_call_sensitive: true,
       psk_required: false,
     });
+  });
+
+  test("labels each provider and host with where it was defined", async () => {
+    const base = await depsWith(new Map([["stripe", STRIPE]]));
+    const app = buildApp({
+      ...base,
+      status: {
+        ...base.status,
+        config: {
+          ...base.status!.config,
+          inline: { hosts: false, providers: true },
+        },
+        providerSources: { stripe: "OUTPOST_PROVIDERS · stripe" },
+      },
+    });
+    const o = await overview(app);
+    expect(o.config.inline).toEqual({ hosts: false, providers: true });
+    expect(o.providers[0].source).toBe("OUTPOST_PROVIDERS · stripe");
+    expect(o.hosts.map((h) => h.source)).toEqual([
+      "./hosts.yaml",
+      "./hosts.yaml",
+    ]);
   });
 
   test("tells a viewer outside the policy that they are denied, and flags a PSK host", async () => {

@@ -34,7 +34,106 @@
 {% do c1.environment.add_env("OUTPOST_CONFIG_WATCH", true) %}
 {% do c1.environment.add_env("REDIS_URL", redis.get_url("redis")) %}
 
-{# Provider credentials (GITHUB_TOKEN, STRIPE_SECRET_KEY, ...) arrive here. #}
+{# ── Hosts and providers from the form ─────────────────────────────────────
+   The form is serialised to JSON in OUTPOST_HOSTS / OUTPOST_PROVIDERS, which
+   Outpost merges on top of hosts.yaml and providers/ on the config dataset.
+   Secrets never go into those two variables: each PSK and credential gets its
+   own generated variable, referenced by name, so the dashboard can show it as
+   set/unset without ever reading it. #}
+{% set seen = namespace(ids=[], envs=[]) %}
+{% set form_hosts = namespace(x=[]) %}
+{% for host in values.get("hosts", []) %}
+  {% if host.id in seen.ids %}
+    {% do tpl.funcs.fail("Hosts: the name [%s] is used more than once" | format(host.id)) %}
+  {% endif %}
+  {% do seen.ids.append(host.id) %}
+  {% set addresses = host.addresses | map("trim") | reject("equalto", "") | list %}
+  {% if not addresses %}
+    {% do tpl.funcs.fail("Hosts: [%s] needs at least one address" | format(host.id)) %}
+  {% endif %}
+  {% set entry = {"id": host.id, "cidrs": addresses, "can_call_sensitive": host.can_call_sensitive} %}
+  {% if host.description %}{% do entry.update({"description": host.description}) %}{% endif %}
+  {% if host.psk %}
+    {% set psk_env = "OUTPOST_HOST_%s_PSK" | format(host.id | upper | replace("-", "_")) %}
+    {% if psk_env in seen.envs %}
+      {% do tpl.funcs.fail("Hosts: [%s] clashes with another host name (names differing only in case or '-' vs '_' share a key variable)" | format(host.id)) %}
+    {% endif %}
+    {% do seen.envs.append(psk_env) %}
+    {% do c1.environment.add_env(psk_env, host.psk) %}
+    {% do entry.update({"auth_token_env": psk_env}) %}
+  {% endif %}
+  {% do form_hosts.x.append(entry) %}
+{% endfor %}
+{% if form_hosts.x %}
+  {% do c1.environment.add_env("OUTPOST_HOSTS", form_hosts.x | tojson) %}
+{% endif %}
+
+{% set seen_providers = namespace(names=[], keys=[]) %}
+{% set form_providers = namespace(x=[]) %}
+{% for p in values.get("providers", []) %}
+  {% if p.name in seen_providers.names %}
+    {% do tpl.funcs.fail("Providers: the name [%s] is used more than once" | format(p.name)) %}
+  {% endif %}
+  {% do seen_providers.names.append(p.name) %}
+  {% set key = "OUTPOST_PROVIDER_%s" | format(p.name | upper | replace("-", "_")) %}
+  {% if key in seen_providers.keys %}
+    {% do tpl.funcs.fail("Providers: [%s] clashes with another provider name ('-' and '_' share a credential variable)" | format(p.name)) %}
+  {% endif %}
+  {% do seen_providers.keys.append(key) %}
+
+  {% if p.auth_type in ["bearer", "api_key_header", "api_key_query"] %}
+    {% if not p.token %}
+      {% do tpl.funcs.fail("Providers: [%s] needs a Token / API Key" | format(p.name)) %}
+    {% endif %}
+    {% do c1.environment.add_env(key ~ "_TOKEN", p.token) %}
+    {% if p.auth_type == "bearer" %}
+      {% set auth = {"type": "bearer_static", "env": key ~ "_TOKEN"} %}
+    {% elif p.auth_type == "api_key_header" %}
+      {% set auth = {"type": "api_key_header", "env": key ~ "_TOKEN", "header": p.header or "X-API-Key", "prefix": p.prefix or ""} %}
+    {% else %}
+      {% set auth = {"type": "api_key_query", "env": key ~ "_TOKEN", "param": p.param or "api_key"} %}
+    {% endif %}
+  {% elif p.auth_type == "basic_auth" %}
+    {% if not p.username or not p.password %}
+      {% do tpl.funcs.fail("Providers: [%s] needs a username and a password" | format(p.name)) %}
+    {% endif %}
+    {% do c1.environment.add_env(key ~ "_USERNAME", p.username) %}
+    {% do c1.environment.add_env(key ~ "_PASSWORD", p.password) %}
+    {% set auth = {"type": "basic_auth", "username_env": key ~ "_USERNAME", "password_env": key ~ "_PASSWORD"} %}
+  {% elif p.auth_type == "custom" %}
+    {% if not (p.auth_yaml or "") | trim %}
+      {% do tpl.funcs.fail("Providers: [%s] uses custom authentication but its Authentication (YAML) is empty" | format(p.name)) %}
+    {% endif %}
+    {# Outpost parses and validates the YAML; a mistake shows on the dashboard. #}
+    {% set auth = p.auth_yaml %}
+  {% else %}
+    {% set auth = {"type": "none"} %}
+  {% endif %}
+
+  {% set forwarding = {"mode": p.mode, "deny": p.deny | map("trim") | reject("equalto", "") | list} %}
+  {% if p.mode == "allowlist" %}
+    {% if not p.allow %}
+      {% do tpl.funcs.fail("Providers: [%s] forwards only allowed routes but lists none — add a route or choose 'Forward every path'" | format(p.name)) %}
+    {% endif %}
+    {% set rules = namespace(x=[]) %}
+    {% for r in p.allow %}
+      {% do rules.x.append({"method": r.method, "pattern": r.pattern, "sensitive": r.sensitive, "cache_ttl": r.cache_ttl}) %}
+    {% endfor %}
+    {% do forwarding.update({"allow": rules.x}) %}
+  {% else %}
+    {% do forwarding.update({"treat_writes_as_sensitive": p.writes_sensitive}) %}
+  {% endif %}
+
+  {% set entry = {"name": p.name, "base_url": p.base_url, "auth": auth, "forwarding": forwarding} %}
+  {% if p.description %}{% do entry.update({"description": p.description}) %}{% endif %}
+  {% if (p.extra or "") | trim %}{% do entry.update({"extra": p.extra}) %}{% endif %}
+  {% do form_providers.x.append(entry) %}
+{% endfor %}
+{% if form_providers.x %}
+  {% do c1.environment.add_env("OUTPOST_PROVIDERS", form_providers.x | tojson) %}
+{% endif %}
+
+{# Credentials for providers defined as files or as custom YAML arrive here. #}
 {% do c1.environment.add_user_envs(values.outpost.additional_envs) %}
 
 {% do c1.add_port(values.network.web_port) %}
@@ -60,11 +159,12 @@
 {% if values.outpost.dashboard %}
 {% do tpl.notes.add_info("**Open the dashboard** (the portal link, `/dashboard`): it shows what loaded, the host policy, whether each credential variable is set, any configuration error, and the address Outpost sees your browser as. No credential value is ever shown.") %}
 {% endif %}
-{% do tpl.notes.add_info("**Add a provider**: drop a YAML file into `providers/` on the config dataset — `name`, `base_url` and an `auth` block naming an environment variable is enough. A commented `hosts.yaml` and a disabled `example.yaml` are written there on first boot.") %}
-{% do tpl.notes.add_info("**Set the credential**: edit this app and add the environment variable your provider names (e.g. `GITHUB_TOKEN`) under *Additional Environment Variables*. Credentials live only there — never on the config dataset, and never in front of your agents.") %}
-{% do tpl.notes.add_info("**Edits apply live**: provider YAMLs and `hosts.yaml` are re-read whenever they change on the dataset, so there is no restart step. A file that fails to parse is reported on the dashboard and the previous configuration stays in force.") %}
+{% do tpl.notes.add_info("**Add a provider**: edit this app and add it under *Providers* — a name, the API's base URL, how it authenticates and the credential. Credentials entered there are passed to Outpost as environment variables; they never reach the config dataset or your agents.") %}
+{% do tpl.notes.add_info("**Prefer files?** Provider YAMLs in `providers/` and `hosts.yaml` on the config dataset are loaded too, and re-read whenever they change — no restart. An entry in the app form wins over a file entry with the same name.") %}
 {% do tpl.notes.add_info("**Point your agent at** `http://<truenas-ip>:%s` with an `X-Provider: <name>` header. Outpost injects the credential and forwards the call, so the agent never sees the secret."|format(values.network.web_port.port_number)) %}
-{% do tpl.notes.add_info("**Allow your agent's address**: the seeded `hosts.yaml` permits loopback only and everything else gets a 403. Outpost matches on the source address it actually sees — a LAN agent by its LAN address, a container on this host by the Docker bridge address, not 127.0.0.1. The dashboard's *Your connection* card shows exactly which address that is and the `hosts.yaml` lines to allow it.") %}
-{% do tpl.notes.add_info("**Before widening access**: give every non-loopback host an `auth_token_env` pre-shared key and prefer `forwarding.mode: allowlist` on its providers. See https://github.com/sausin/outpost/blob/main/docs/TRUENAS.md") %}
+{% if not values.get("hosts", []) %}
+{% do tpl.notes.add_info("**Allow your agent's address**: only loopback is allowed so far and everything else gets a 403. Edit this app and add it under *Hosts*. Outpost matches on the source address it actually sees — a LAN agent by its LAN address, another app on this TrueNAS by the Docker range (`172.16.0.0/12`), not 127.0.0.1. The dashboard's *Your connection* card shows exactly which address that is.") %}
+{% endif %}
+{% do tpl.notes.add_info("**Before widening access**: give every host other than this machine a pre-shared key, and prefer *Forward only the routes listed* on its providers. See https://github.com/sausin/outpost/blob/main/docs/TRUENAS.md") %}
 
 {{ tpl.render() | tojson }}
